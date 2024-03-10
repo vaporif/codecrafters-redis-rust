@@ -46,6 +46,7 @@ fn processing_loop(receiver_tx: Receiver<Connection>) {
     });
 }
 
+#[derive(Debug)]
 pub struct Connection {
     socket: SocketAddr,
     tcp_stream: TcpStream,
