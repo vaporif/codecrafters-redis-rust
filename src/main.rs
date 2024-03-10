@@ -1,7 +1,7 @@
 use async_channel::bounded;
 use clap::Parser;
 use cli::Cli;
-use server::server_listen;
+use server::connections_listen;
 use tokio::{
     io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
@@ -9,7 +9,6 @@ use tokio::{
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 mod cli;
-mod connection;
 pub mod prelude;
 mod server;
 use crate::prelude::*;
@@ -32,7 +31,7 @@ async fn main() -> Result<()> {
     init_tracing(false);
     let cli = Cli::parse();
 
-    server_listen(cli.socket.into(), cli.max_connections)
+    connections_listen(cli.socket.into(), cli.max_connections)
         .await
         .context("listen error")?;
 

@@ -4,12 +4,13 @@ use crate::prelude::*;
 
 use async_channel::{bounded, Receiver};
 
-use tokio::{
-    io::AsyncWriteExt,
-    net::{TcpListener, TcpStream},
-};
+use tokio::net::{TcpListener, TcpStream};
 
-pub async fn server_listen(socket: SocketAddr, max_connections: usize) -> anyhow::Result<()> {
+use connection::Connection;
+
+mod connection;
+
+pub async fn connections_listen(socket: SocketAddr, max_connections: usize) -> anyhow::Result<()> {
     let listener = TcpListener::bind(socket)
         .await
         .context("failed to listen")?;
@@ -20,7 +21,7 @@ pub async fn server_listen(socket: SocketAddr, max_connections: usize) -> anyhow
     loop {
         match listener.accept().await {
             Ok((tcp_stream, socket)) => {
-                let connection = Connection { socket, tcp_stream };
+                let connection = Connection::new(socket, tcp_stream);
 
                 if let Err(e) = connection_snd.send(connection).await {
                     bail!("processing channel error {e}");
@@ -44,44 +45,4 @@ fn processing_loop(receiver_tx: Receiver<Connection>) {
             }
         }
     });
-}
-
-#[derive(Debug)]
-#[allow(unused)]
-pub struct Connection {
-    socket: SocketAddr,
-    tcp_stream: TcpStream,
-}
-
-impl Connection {
-    #[tracing::instrument]
-    async fn process(&mut self) -> anyhow::Result<()> {
-        self.tcp_stream
-            .write_all("+PONG\r\n".as_bytes())
-            .await
-            .context("Failed to process ")
-    }
-}
-
-#[allow(unused)]
-enum Message {
-    Ping,
-    Pong,
-}
-
-#[allow(unused)]
-impl Message {
-    fn to_resp(&self) -> anyhow::Result<Message> {
-        match self {
-            Message::Ping => Ok(Message::Pong),
-            _ => bail!("could not be responded"),
-        }
-    }
-
-    fn to_binary_resp(&self) -> &'static [u8] {
-        match self {
-            Message::Ping => "Ping".as_bytes(),
-            Message::Pong => "Pong".as_bytes(),
-        }
-    }
 }
