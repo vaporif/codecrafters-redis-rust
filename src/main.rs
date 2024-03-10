@@ -1,4 +1,3 @@
-
 use clap::Parser;
 use cli::Cli;
 use server::connections_listen;

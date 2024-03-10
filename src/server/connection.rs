@@ -1,4 +1,4 @@
-use std::{io::Write, net::SocketAddr};
+use std::net::SocketAddr;
 
 use crate::prelude::*;
 use tokio::{io::AsyncWriteExt, net::TcpStream};
