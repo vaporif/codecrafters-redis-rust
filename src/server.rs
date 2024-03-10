@@ -23,7 +23,7 @@ pub async fn connections_listen(socket: SocketAddr, max_connections: usize) -> a
                     bail!("processing channel error {e}");
                 }
             }
-            Err(e) => eprintln!("Failed to accept connection {e}"),
+            Err(e) => error!("Failed to accept connection {:?}", e),
         }
     }
 }
@@ -35,7 +35,7 @@ fn processing_loop(receiver_tx: Receiver<Connection>) {
                 trace!("accepted new connection");
                 tokio::spawn(async move {
                     if let Err(e) = connection.process().await {
-                        eprintln!("Failed to process stream, error {e}")
+                        error!("Failed to process connection, error {:?}", e)
                     }
                 });
             }
