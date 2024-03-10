@@ -47,6 +47,7 @@ fn processing_loop(receiver_tx: Receiver<Connection>) {
 }
 
 #[derive(Debug)]
+#[allow(unused)]
 pub struct Connection {
     socket: SocketAddr,
     tcp_stream: TcpStream,
@@ -62,11 +63,13 @@ impl Connection {
     }
 }
 
+#[allow(unused)]
 enum Message {
     Ping,
     Pong,
 }
 
+#[allow(unused)]
 impl Message {
     fn to_resp(&self) -> anyhow::Result<Message> {
         match self {

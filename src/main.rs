@@ -38,24 +38,3 @@ async fn main() -> Result<()> {
 
     Ok(())
 }
-
-enum Message {
-    Ping,
-    Pong,
-}
-
-impl Message {
-    fn to_resp(&self) -> anyhow::Result<Message> {
-        match self {
-            Message::Ping => Ok(Message::Pong),
-            _ => bail!("could not be responded"),
-        }
-    }
-
-    fn to_binary_resp(&self) -> &'static [u8] {
-        match self {
-            Message::Ping => "Ping".as_bytes(),
-            Message::Pong => "Pong".as_bytes(),
-        }
-    }
-}
