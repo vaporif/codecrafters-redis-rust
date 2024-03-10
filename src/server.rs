@@ -1,13 +1,9 @@
+use async_channel::{bounded, Receiver};
 use std::net::SocketAddr;
+use tokio::net::TcpListener;
 
 use crate::prelude::*;
-
-use async_channel::{bounded, Receiver};
-
-use tokio::net::{TcpListener};
-
 use connection::Connection;
-
 mod connection;
 
 pub async fn connections_listen(socket: SocketAddr, max_connections: usize) -> anyhow::Result<()> {

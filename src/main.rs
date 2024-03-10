@@ -1,7 +1,6 @@
 use clap::Parser;
 use cli::Cli;
 use server::connections_listen;
-
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 mod cli;

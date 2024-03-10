@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
+use tokio::{io::AsyncWriteExt, net::TcpStream};
 
 use crate::prelude::*;
-use tokio::{io::AsyncWriteExt, net::TcpStream};
 
 #[derive(Debug)]
 #[allow(unused)]
