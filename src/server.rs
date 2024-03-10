@@ -4,7 +4,7 @@ use crate::prelude::*;
 
 use async_channel::{bounded, Receiver};
 
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener};
 
 use connection::Connection;
 
