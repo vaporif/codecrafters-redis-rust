@@ -1,6 +1,7 @@
 use async_channel::bounded;
 use clap::Parser;
 use cli::Cli;
+use server::server_listen;
 use tokio::{
     io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
@@ -8,7 +9,9 @@ use tokio::{
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 mod cli;
+mod connection;
 pub mod prelude;
+mod server;
 use crate::prelude::*;
 
 fn init_tracing(tokio_console: bool) {
@@ -24,40 +27,14 @@ fn init_tracing(tokio_console: bool) {
     };
 }
 
-#[tokio::main()]
+#[tokio::main]
 async fn main() -> Result<()> {
     init_tracing(false);
     let cli = Cli::parse();
 
-    let (connection_snd, connections_processor) = bounded::<TcpStream>(cli.max_connections);
-
-    let listener = TcpListener::bind(cli.socket)
+    server_listen(cli.socket.into(), cli.max_connections)
         .await
-        .context("failed to listen")?;
-    tokio::spawn(async move {
-        loop {
-            while let Ok(mut stream) = connections_processor.recv().await {
-                trace!("accepted new connection");
-                tokio::spawn(async move {
-                    if let Err(e) = stream.write_all("+PONG\r\n".as_bytes()).await {
-                        eprintln!("Failed to process stream, error {e}")
-                    }
-                });
-            }
-        }
-    });
-
-    loop {
-        match listener.accept().await {
-            Ok((stream, _)) => {
-                if let Err(e) = connection_snd.send(stream).await {
-                    eprintln!("processing channel error {e}");
-                    break;
-                }
-            }
-            Err(e) => eprintln!("Failed to accept connection {e}"),
-        }
-    }
+        .context("listen error")?;
 
     Ok(())
 }
@@ -68,7 +45,14 @@ enum Message {
 }
 
 impl Message {
-    fn to_resp(&self) -> &'static [u8] {
+    fn to_resp(&self) -> anyhow::Result<Message> {
+        match self {
+            Message::Ping => Ok(Message::Pong),
+            _ => bail!("could not be responded"),
+        }
+    }
+
+    fn to_binary_resp(&self) -> &'static [u8] {
         match self {
             Message::Ping => "Ping".as_bytes(),
             Message::Pong => "Pong".as_bytes(),
