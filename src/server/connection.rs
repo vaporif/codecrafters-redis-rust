@@ -106,7 +106,7 @@ impl Decoder for RespCodec {
 
         let cursor = Cursor::new(src.clone().freeze());
 
-        trace!("bytes buffer {?:}", cursor);
+        trace!("bytes buffer {:?}", cursor);
         let buff_reader = BufReader::new(cursor);
         let mut decoder = RespDecoder::new(buff_reader);
         let message = decoder.decode().context("decode resp error")?;
