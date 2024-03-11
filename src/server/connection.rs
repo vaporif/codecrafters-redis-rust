@@ -1,11 +1,14 @@
-use std::net::SocketAddr;
+use bytes::Buf;
+use resp::{Decoder as RespDecoder, Value as RespMessage};
+use std::{
+    io::{BufReader, Cursor},
+    net::SocketAddr,
+};
 use tokio::net::TcpStream;
 use tokio_util::codec::{Decoder, Encoder, Framed};
 
 use crate::prelude::*;
 use futures::{sink::SinkExt, StreamExt};
-
-const EOL: &[u8] = b"\r\n";
 
 #[derive(Debug)]
 #[allow(unused)]
@@ -24,20 +27,16 @@ impl Connection {
     pub async fn process(&mut self) -> anyhow::Result<()> {
         loop {
             let message = self.next_message().await.context("get message error")?;
-            match message {
-                RespMessage::String(string_message) => {
-                    let command: Command =
-                        string_message.try_into().context("converting to command")?;
+            let commands = convert_to_command(message).context("converting to command")?;
 
-                    match command {
-                        Command::Ping => self
-                            .send_message(Command::Pong)
-                            .await
-                            .context("sending PONG")?,
-                        _ => bail!("unexpected"),
-                    }
+            for command in commands {
+                match command {
+                    Command::Ping => self
+                        .send_message(Command::Pong)
+                        .await
+                        .context("sending PONG")?,
+                    _ => bail!("unexpected"),
                 }
-                _ => todo!("not implemented"),
             }
         }
     }
@@ -60,6 +59,33 @@ impl Connection {
     }
 }
 
+#[instrument]
+fn convert_to_command(value: RespMessage) -> anyhow::Result<Vec<Command>> {
+    let commands = match value {
+        RespMessage::String(string) => parse_command(string)?,
+        RespMessage::Bulk(string) => parse_command(string)?,
+        RespMessage::Array(items) => {
+            items
+                .into_iter()
+                .map(convert_to_command)
+                .try_fold(Vec::new(), |mut acc, f| {
+                    let value = f.context("error during parse")?;
+                    acc.extend(value);
+
+                    Ok::<Vec<_>, anyhow::Error>(acc)
+                })?
+        }
+        _ => bail!("unsupported command"),
+    };
+
+    fn parse_command(string: String) -> anyhow::Result<Vec<Command>> {
+        let command: Command = string.try_into()?;
+        Ok(vec![command])
+    }
+
+    Ok(commands)
+}
+
 #[derive(Debug)]
 struct RespCodec;
 
@@ -78,21 +104,18 @@ impl Decoder for RespCodec {
             return Ok(None);
         }
 
-        if let Some(pos) = src.windows(EOL.len()).position(|ele| ele == EOL) {
-            trace!("full message found at {pos}");
-            let buf = src.split_to(pos + EOL.len());
+        let cursor = Cursor::new(src.clone().freeze());
 
-            if buf.len() <= 1 + EOL.len() {
-                trace!("empty message");
-                return Ok(None);
-            }
+        dbg!(&cursor);
+        let buff_reader = BufReader::new(cursor);
+        let mut decoder = RespDecoder::new(buff_reader);
+        let message = decoder.decode().context("decode resp error")?;
 
-            let message = RespMessage::from_bytes(&buf).context("parsing error")?;
-            return Ok(Some(message));
-        }
+        // NOTE: I expect all packets at once
+        src.advance(message.encode().len());
 
-        trace!("\r\n not found");
-        Ok(None)
+        trace!("message parsed {:?}", message);
+        Ok(Some(message))
     }
 }
 
@@ -105,68 +128,8 @@ impl Encoder<Command> for RespCodec {
         dst: &mut bytes::BytesMut,
     ) -> std::prelude::v1::Result<(), Self::Error> {
         let resp_message: RespMessage = item.into();
-        dst.extend_from_slice(&resp_message.to_bytes());
+        dst.extend_from_slice(&resp_message.encode());
         Ok(())
-    }
-}
-
-#[allow(unused)]
-enum RespMessage {
-    Null,
-    String(String),
-    Error(String),
-    Integer(i64),
-    BulkString(Option<Vec<u8>>),
-    Array(Option<Vec<RespMessage>>),
-}
-
-impl RespMessage {
-    #[instrument()]
-    fn from_bytes(bytes: &[u8]) -> anyhow::Result<RespMessage> {
-        if bytes.is_empty() {
-            return Ok(Self::Null);
-        }
-
-        if bytes.len() < 1 + EOL.len() {
-            bail!("not enough bytes");
-        }
-
-        let first_byte = bytes[0];
-
-        if !bytes.ends_with(EOL) {
-            bail!("bytes do not end with EOL");
-        }
-
-        let message = match first_byte {
-            b'+' => {
-                let string = String::from_utf8(bytes[1..bytes.len() - EOL.len()].to_vec())
-                    .context("failed to convert to string")?;
-
-                trace!("parsed as string {string}");
-
-                RespMessage::String(string)
-            }
-            _ => bail!("unsupported type"),
-        };
-
-        Ok(message)
-    }
-
-    fn to_bytes(&self) -> Vec<u8> {
-        match self {
-            RespMessage::Null => todo!(),
-            RespMessage::String(string) => {
-                let mut vec = Vec::with_capacity(1 + string.len() + EOL.len());
-                vec.push(b'+');
-                vec.extend_from_slice(string.as_bytes());
-                vec.extend_from_slice(EOL);
-                vec
-            }
-            RespMessage::Error(_) => todo!(),
-            RespMessage::Integer(_) => todo!(),
-            RespMessage::BulkString(_) => todo!(),
-            RespMessage::Array(_) => todo!(),
-        }
     }
 }
 
@@ -182,13 +145,15 @@ impl From<Command> for RespMessage {
 impl TryFrom<String> for Command {
     type Error = anyhow::Error;
 
-    #[instrument]
     fn try_from(value: String) -> std::prelude::v1::Result<Self, Self::Error> {
-        match value {
-            _ if value.starts_with("PING") => Ok(Self::Ping),
-            _ if value.starts_with("PONG") => Ok(Self::Pong),
-            s => bail!("wrong value {s}"),
-        }
+        let value = value.to_lowercase();
+        let command = match value.as_str() {
+            "ping" => Command::Ping,
+            "pong" => Command::Pong,
+            s => bail!("unknown command {s}"),
+        };
+
+        Ok(command)
     }
 }
 
