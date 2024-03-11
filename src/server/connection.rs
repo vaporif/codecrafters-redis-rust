@@ -26,23 +26,22 @@ impl Connection {
     #[instrument(skip(self), fields(self.socket = %self.socket))]
     pub async fn process(&mut self) -> anyhow::Result<()> {
         loop {
-            let message = self.next_message().await.context("get message error")?;
-            let commands = convert_to_command(message).context("converting to command")?;
+            let command = self.next_command().await.context("get command error")?;
 
-            for command in commands {
-                match command {
-                    Command::Ping => self
-                        .send_message(Command::Pong)
-                        .await
-                        .context("sending PONG")?,
-                    _ => bail!("unexpected"),
-                }
-            }
+            let command_to_send = match command {
+                Command::Ping(_) => Command::Pong,
+                Command::Echo(echo_string) => Command::Echo(echo_string),
+                _ => bail!("unexpected"),
+            };
+
+            self.send_command(command_to_send)
+                .await
+                .context("sending command")?;
         }
     }
 
     #[tracing::instrument(skip(self))]
-    async fn next_message(&mut self) -> anyhow::Result<RespMessage> {
+    async fn next_command(&mut self) -> anyhow::Result<Command> {
         self.tcp_stream
             .next()
             .await
@@ -51,7 +50,7 @@ impl Connection {
     }
 
     #[tracing::instrument(skip(self))]
-    async fn send_message(&mut self, message: Command) -> anyhow::Result<()> {
+    async fn send_command(&mut self, message: Command) -> anyhow::Result<()> {
         self.tcp_stream
             .send(message)
             .await
@@ -59,38 +58,11 @@ impl Connection {
     }
 }
 
-#[instrument]
-fn convert_to_command(value: RespMessage) -> anyhow::Result<Vec<Command>> {
-    let commands = match value {
-        RespMessage::String(string) => parse_command(string)?,
-        RespMessage::Bulk(string) => parse_command(string)?,
-        RespMessage::Array(items) => {
-            items
-                .into_iter()
-                .map(convert_to_command)
-                .try_fold(Vec::new(), |mut acc, f| {
-                    let value = f.context("error during parse")?;
-                    acc.extend(value);
-
-                    Ok::<Vec<_>, anyhow::Error>(acc)
-                })?
-        }
-        _ => bail!("unsupported command"),
-    };
-
-    fn parse_command(string: String) -> anyhow::Result<Vec<Command>> {
-        let command: Command = string.try_into()?;
-        Ok(vec![command])
-    }
-
-    Ok(commands)
-}
-
 #[derive(Debug)]
 struct RespCodec;
 
 impl Decoder for RespCodec {
-    type Item = RespMessage;
+    type Item = Command;
 
     type Error = anyhow::Error;
 
@@ -114,8 +86,32 @@ impl Decoder for RespCodec {
         // NOTE: I expect all packets at once
         src.advance(message.encode().len());
 
-        trace!("message parsed {:?}", message);
-        Ok(Some(message))
+        let RespMessage::Array(messages) = message else {
+            bail!("expected array for command");
+        };
+
+        trace!("messages parsed {:?}", messages);
+        if messages.is_empty() {
+            bail!("empty messages");
+        }
+
+        let RespMessage::Bulk(string) = messages.first().context("command expected")? else {
+            bail!("non bulk string for command");
+        };
+
+        let string = string.to_lowercase();
+        match string.as_ref() {
+            "ping" => Ok(Some(Command::Ping(None))),
+            "echo" => {
+                let RespMessage::Bulk(argument) = messages.get(1).context("argument expected")?
+                else {
+                    bail!("non builk string for argument");
+                };
+
+                Ok(Some(Command::Echo(argument.to_string())))
+            }
+            s => bail!("unknown command {:?}", s),
+        }
     }
 }
 
@@ -127,39 +123,26 @@ impl Encoder<Command> for RespCodec {
         item: Command,
         dst: &mut bytes::BytesMut,
     ) -> std::prelude::v1::Result<(), Self::Error> {
-        let resp_message: RespMessage = item.into();
+        let resp_message = reply_message(item).context("incorrect command")?;
         dst.extend_from_slice(&resp_message.encode());
         Ok(())
     }
 }
 
-impl From<Command> for RespMessage {
-    fn from(value: Command) -> Self {
-        match value {
-            Command::Ping => RespMessage::String("ping".to_uppercase().to_string()),
-            Command::Pong => RespMessage::String("pong".to_uppercase().to_string()),
-        }
-    }
-}
+fn reply_message(value: Command) -> anyhow::Result<RespMessage> {
+    match value {
+        // TODO: add arg
+        Command::Pong => Ok(RespMessage::Bulk("pong".to_uppercase().to_string())),
+        Command::Echo(echo_string) => Ok(RespMessage::Bulk(echo_string)),
 
-impl TryFrom<String> for Command {
-    type Error = anyhow::Error;
-
-    fn try_from(value: String) -> std::prelude::v1::Result<Self, Self::Error> {
-        let value = value.to_lowercase();
-        let command = match value.as_str() {
-            "ping" => Command::Ping,
-            "pong" => Command::Pong,
-            s => bail!("unknown command {s}"),
-        };
-
-        Ok(command)
+        s => bail!("reply not supported for {:?}", s),
     }
 }
 
 #[allow(unused)]
 #[derive(Debug)]
 enum Command {
-    Ping,
+    Ping(Option<String>),
     Pong,
+    Echo(String),
 }
