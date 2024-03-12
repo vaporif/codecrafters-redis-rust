@@ -6,7 +6,7 @@ use crate::prelude::*;
 
 use super::commands::*;
 
-// TODO: Add sharding
+// TODO: Add sharding & active expiration
 pub struct StorageActor {
     data: HashMap<String, String>,
     expire_info: HashMap<String, Instant>,
