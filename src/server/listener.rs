@@ -11,7 +11,7 @@ use super::{
 pub async fn run_listener(socket: SocketAddr, max_connections: usize) -> anyhow::Result<()> {
     let listener = TcpListener::bind(socket)
         .await
-        .context("failed to listen")?;
+        .context("listening on port")?;
 
     let (connection_processor_tx, connection_processor_rx) =
         bounded::<ConnectionActor>(max_connections);
