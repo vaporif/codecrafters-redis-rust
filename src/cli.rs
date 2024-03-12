@@ -13,8 +13,6 @@ pub struct Cli {
     #[arg(short, long, default_value_t = 10_000)]
     pub max_connections: usize,
     #[arg(short, long)]
-    pub loop_processing: bool,
-    #[arg(short, long)]
     pub tokio_console: bool,
 }
 

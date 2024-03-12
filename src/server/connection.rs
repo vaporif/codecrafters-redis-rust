@@ -1,3 +1,4 @@
+use async_channel::Sender;
 use bytes::Buf;
 use resp::{Decoder as RespDecoder, Value as RespMessage};
 use std::{
@@ -7,30 +8,66 @@ use std::{
 use tokio::net::TcpStream;
 use tokio_util::codec::{Decoder, Encoder, Framed};
 
+use tokio::sync::oneshot;
+
 use crate::prelude::*;
 use futures::{sink::SinkExt, StreamExt};
 
-#[derive(Debug)]
+use super::StoreCommand;
+
+#[derive(DebugExtras)]
 #[allow(unused)]
-pub struct Connection {
-    socket: SocketAddr,
+pub struct ConnectionActor {
+    pub socket: SocketAddr,
+    #[debug_ignore]
     tcp_stream: Framed<TcpStream, RespCodec>,
 }
 
-impl Connection {
+impl ConnectionActor {
     pub fn new(socket: SocketAddr, tcp_stream: TcpStream) -> Self {
         let tcp_stream = Framed::new(tcp_stream, RespCodec);
         Self { socket, tcp_stream }
     }
 
-    #[instrument(skip(self), fields(self.socket = %self.socket))]
-    pub async fn process(&mut self) -> anyhow::Result<()> {
+    #[instrument(skip(store_access_tx))]
+    pub async fn run_connection_actor(
+        &mut self,
+        store_access_tx: Sender<StoreCommand>,
+    ) -> anyhow::Result<()> {
         loop {
             let command = self.next_command().await.context("get command error")?;
 
+            // TODO: refactor get&set
             let command_to_send = match command {
-                Command::Ping(_) => Command::Pong,
-                Command::Echo(echo_string) => Command::Echo(echo_string),
+                Command::Ping(_) => RespMessage::Bulk("pong".to_uppercase().to_string()),
+                Command::Echo(echo_string) => RespMessage::Bulk(echo_string),
+                Command::Set(key, value) => {
+                    let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
+                    store_access_tx
+                        .send(StoreCommand::Set(key, value, reply_channel_tx))
+                        .await
+                        .context("sending set store command")?;
+
+                    match reply_channel_rx.await.context("waiting for reply") {
+                        Ok(_) => RespMessage::Bulk("ok".to_uppercase().to_string()),
+                        Err(e) => RespMessage::Error(format!("error {:?}", e)),
+                    }
+                }
+                Command::Get(key) => {
+                    let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
+                    store_access_tx
+                        .send(StoreCommand::Get(key, reply_channel_tx))
+                        .await
+                        .context("sending set store command")?;
+
+                    match reply_channel_rx.await.context("waiting for reply") {
+                        Ok(result) => match result {
+                            Some(value) => RespMessage::Bulk(value),
+                            None => RespMessage::Null,
+                        },
+                        Err(e) => RespMessage::Error(format!("error {:?}", e)),
+                    }
+                }
                 _ => bail!("unexpected"),
             };
 
@@ -50,7 +87,7 @@ impl Connection {
     }
 
     #[tracing::instrument(skip(self))]
-    async fn send_command(&mut self, message: Command) -> anyhow::Result<()> {
+    async fn send_command(&mut self, message: RespMessage) -> anyhow::Result<()> {
         self.tcp_stream
             .send(message)
             .await
@@ -105,37 +142,43 @@ impl Decoder for RespCodec {
             "echo" => {
                 let RespMessage::Bulk(argument) = messages.get(1).context("argument expected")?
                 else {
-                    bail!("non builk string for argument");
+                    bail!("non bulk string for argument");
                 };
 
                 Ok(Some(Command::Echo(argument.to_string())))
+            }
+            "set" => {
+                let RespMessage::Bulk(key) = messages.get(1).context("key expected")? else {
+                    bail!("non bulk string for key");
+                };
+
+                let RespMessage::Bulk(value) = messages.get(2).context("value expected")? else {
+                    bail!("non bulk string for value");
+                };
+                Ok(Some(Command::Set(key.to_string(), value.to_string())))
+            }
+            "get" => {
+                let RespMessage::Bulk(key) = messages.get(1).context("key expected")? else {
+                    bail!("non bulk string for key");
+                };
+
+                Ok(Some(Command::Get(key.to_string())))
             }
             s => bail!("unknown command {:?}", s),
         }
     }
 }
 
-impl Encoder<Command> for RespCodec {
+impl Encoder<RespMessage> for RespCodec {
     type Error = anyhow::Error;
 
     fn encode(
         &mut self,
-        item: Command,
+        item: RespMessage,
         dst: &mut bytes::BytesMut,
     ) -> std::prelude::v1::Result<(), Self::Error> {
-        let resp_message = reply_message(item).context("incorrect command")?;
-        dst.extend_from_slice(&resp_message.encode());
+        dst.extend_from_slice(&item.encode());
         Ok(())
-    }
-}
-
-fn reply_message(value: Command) -> anyhow::Result<RespMessage> {
-    match value {
-        // TODO: add arg
-        Command::Pong => Ok(RespMessage::Bulk("pong".to_uppercase().to_string())),
-        Command::Echo(echo_string) => Ok(RespMessage::Bulk(echo_string)),
-
-        s => bail!("reply not supported for {:?}", s),
     }
 }
 
@@ -145,4 +188,6 @@ enum Command {
     Ping(Option<String>),
     Pong,
     Echo(String),
+    Set(String, String),
+    Get(String),
 }
