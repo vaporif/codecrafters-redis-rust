@@ -58,8 +58,6 @@ fn run_connection_actors(
     });
 }
 
-struct Entry {}
-
 // TODO: Add sharding
 struct StorageActor {
     data: HashMap<String, String>,
