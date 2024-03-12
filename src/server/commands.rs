@@ -22,3 +22,19 @@ pub struct SetData {
 pub struct SetArguments {
     pub ttl: Option<Duration>,
 }
+
+#[allow(unused)]
+#[derive(Debug)]
+pub enum Command {
+    Ping(Option<String>),
+    Pong,
+    Echo(String),
+    Set(SetData),
+    Get(String),
+    Info(InfoCommand),
+}
+
+#[derive(Debug)]
+pub enum InfoCommand {
+    Replication,
+}

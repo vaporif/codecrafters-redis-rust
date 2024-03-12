@@ -54,16 +54,7 @@ impl Encoder<RespMessage> for RespCodec {
     }
 }
 
-#[allow(unused)]
-#[derive(Debug)]
-pub enum Command {
-    Ping(Option<String>),
-    Pong,
-    Echo(String),
-    Set(SetData),
-    Get(String),
-}
-
+// TODO: refactor mapping of commands, maybe use serde?
 impl TryFrom<RespMessage> for Command {
     type Error = anyhow::Error;
 
@@ -134,6 +125,17 @@ impl TryFrom<RespMessage> for Command {
                 };
 
                 Ok(Command::Get(key.to_string()))
+            }
+            "info" => {
+                let RespMessage::Bulk(command_type) = messages.get(1).context("get type")? else {
+                    bail!("non bulk string for type");
+                };
+
+                let command_type = command_type.to_lowercase();
+                match command_type.as_str() {
+                    "replication" => Ok(Command::Info(InfoCommand::Replication)),
+                    _ => bail!("unsupported command"),
+                }
             }
             s => bail!("unknown command {:?}", s),
         }

@@ -7,10 +7,7 @@ use tokio_util::codec::Framed;
 
 use tokio::sync::oneshot;
 
-use super::{
-    codec::{Command, RespCodec},
-    commands::*,
-};
+use super::{codec::RespCodec, commands::*};
 use crate::prelude::*;
 
 #[derive(DebugExtras)]
@@ -65,6 +62,10 @@ impl ConnectionActor {
                         Err(e) => RespMessage::Error(format!("error {:?}", e)),
                     }
                 }
+                // TODO: would need serde :(
+                Command::Info(info_data) => match info_data {
+                    InfoCommand::Replication => RespMessage::Bulk("role:master".to_string()),
+                },
                 _ => bail!("unexpected"),
             };
 
