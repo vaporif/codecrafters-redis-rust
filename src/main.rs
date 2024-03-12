@@ -2,7 +2,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 
 use clap::Parser;
 use cli::Cli;
-use server::connections_listen;
+use server::run_listener;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 mod cli;
@@ -29,7 +29,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let socket = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), cli.port);
-    connections_listen(socket.into(), cli.max_connections)
+    run_listener(socket.into(), cli.max_connections)
         .await
         .context("listen error")?;
 

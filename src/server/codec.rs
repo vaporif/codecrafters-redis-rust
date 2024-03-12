@@ -1,103 +1,16 @@
-use async_channel::Sender;
 use bytes::Buf;
 use resp::{Decoder as RespDecoder, Value as RespMessage};
 use std::{
     io::{BufReader, Cursor},
-    net::SocketAddr,
     time::Duration,
 };
-use tokio::net::TcpStream;
-use tokio_util::codec::{Decoder, Encoder, Framed};
+use tokio_util::codec::{Decoder, Encoder};
 
-use tokio::sync::oneshot;
-
-use crate::{prelude::*, server::SetData};
-use futures::{sink::SinkExt, StreamExt};
-
-use super::{SetArguments, StoreCommand};
-
-#[derive(DebugExtras)]
-#[allow(unused)]
-pub struct ConnectionActor {
-    pub socket: SocketAddr,
-    #[debug_ignore]
-    tcp_stream: Framed<TcpStream, RespCodec>,
-}
-
-impl ConnectionActor {
-    pub fn new(socket: SocketAddr, tcp_stream: TcpStream) -> Self {
-        let tcp_stream = Framed::new(tcp_stream, RespCodec);
-        Self { socket, tcp_stream }
-    }
-
-    #[instrument(skip(store_access_tx))]
-    pub async fn run_connection_actor(
-        &mut self,
-        store_access_tx: Sender<StoreCommand>,
-    ) -> anyhow::Result<()> {
-        loop {
-            let command = self.next_command().await.context("get command error")?;
-
-            // TODO: refactor get&set
-            let command_to_send = match command {
-                Command::Ping(_) => RespMessage::Bulk("pong".to_uppercase().to_string()),
-                Command::Echo(echo_string) => RespMessage::Bulk(echo_string),
-                Command::Set(set_data) => {
-                    let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
-                    store_access_tx
-                        .send(StoreCommand::Set(set_data, reply_channel_tx))
-                        .await
-                        .context("sending set store command")?;
-
-                    match reply_channel_rx.await.context("waiting for reply") {
-                        Ok(_) => RespMessage::Bulk("ok".to_uppercase().to_string()),
-                        Err(e) => RespMessage::Error(format!("error {:?}", e)),
-                    }
-                }
-                Command::Get(key) => {
-                    let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
-                    store_access_tx
-                        .send(StoreCommand::Get(key, reply_channel_tx))
-                        .await
-                        .context("sending set store command")?;
-
-                    match reply_channel_rx.await.context("waiting for reply") {
-                        Ok(result) => match result {
-                            Some(value) => RespMessage::Bulk(value),
-                            None => RespMessage::Null,
-                        },
-                        Err(e) => RespMessage::Error(format!("error {:?}", e)),
-                    }
-                }
-                _ => bail!("unexpected"),
-            };
-
-            self.send_command(command_to_send)
-                .await
-                .context("sending command")?;
-        }
-    }
-
-    #[tracing::instrument(skip(self))]
-    async fn next_command(&mut self) -> anyhow::Result<Command> {
-        self.tcp_stream
-            .next()
-            .await
-            .map(|m| m.context("stream closed"))
-            .context("message expected")?
-    }
-
-    #[tracing::instrument(skip(self))]
-    async fn send_command(&mut self, message: RespMessage) -> anyhow::Result<()> {
-        self.tcp_stream
-            .send(message)
-            .await
-            .context("sending message")
-    }
-}
+use super::commands::*;
+use crate::prelude::*;
 
 #[derive(Debug)]
-struct RespCodec;
+pub struct RespCodec;
 
 impl Decoder for RespCodec {
     type Item = Command;
@@ -123,7 +36,7 @@ impl Decoder for RespCodec {
 
         // NOTE: I expect all packets at once
         src.advance(message.encode().len());
-        let command = Command::to_command(message)?;
+        let command = Command::try_from(message)?;
         Ok(Some(command))
     }
 }
@@ -143,7 +56,7 @@ impl Encoder<RespMessage> for RespCodec {
 
 #[allow(unused)]
 #[derive(Debug)]
-enum Command {
+pub enum Command {
     Ping(Option<String>),
     Pong,
     Echo(String),
@@ -151,8 +64,10 @@ enum Command {
     Get(String),
 }
 
-impl Command {
-    fn to_command(message: RespMessage) -> anyhow::Result<Self> {
+impl TryFrom<RespMessage> for Command {
+    type Error = anyhow::Error;
+
+    fn try_from(message: RespMessage) -> std::prelude::v1::Result<Self, Self::Error> {
         let RespMessage::Array(messages) = message else {
             bail!("expected array for command");
         };
