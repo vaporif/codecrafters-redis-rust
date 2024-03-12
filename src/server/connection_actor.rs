@@ -30,10 +30,12 @@ impl ConnectionActor {
     #[instrument(skip(store_access_tx))]
     pub async fn run_actor(&mut self, store_access_tx: Sender<StoreCommand>) -> anyhow::Result<()> {
         loop {
-            let command = self.next_command().await.context("get command error")?;
+            let command = self
+                .next_command()
+                .await
+                .context("next command from client")?;
 
-            // TODO: refactor get&set
-            let command_to_send = match command {
+            let response_message = match command {
                 Command::Ping(_) => RespMessage::Bulk("pong".to_uppercase().to_string()),
                 Command::Echo(echo_string) => RespMessage::Bulk(echo_string),
                 Command::Set(set_data) => {
@@ -43,7 +45,7 @@ impl ConnectionActor {
                         .await
                         .context("sending set store command")?;
 
-                    match reply_channel_rx.await.context("waiting for reply") {
+                    match reply_channel_rx.await.context("waiting for reply for set") {
                         Ok(_) => RespMessage::Bulk("ok".to_uppercase().to_string()),
                         Err(e) => RespMessage::Error(format!("error {:?}", e)),
                     }
@@ -55,7 +57,7 @@ impl ConnectionActor {
                         .await
                         .context("sending set store command")?;
 
-                    match reply_channel_rx.await.context("waiting for reply") {
+                    match reply_channel_rx.await.context("waiting for reply for get") {
                         Ok(result) => match result {
                             Some(value) => RespMessage::Bulk(value),
                             None => RespMessage::Null,
@@ -66,23 +68,24 @@ impl ConnectionActor {
                 _ => bail!("unexpected"),
             };
 
-            self.send_command(command_to_send)
+            self.send_response(response_message)
                 .await
-                .context("sending command")?;
+                .context("sending response")?;
         }
     }
 
+    // TODO: cover connection shutdown
     #[tracing::instrument(skip(self))]
     async fn next_command(&mut self) -> anyhow::Result<Command> {
         self.tcp_stream
             .next()
             .await
-            .map(|m| m.context("stream closed"))
-            .context("message expected")?
+            .map(|m| m.context("tcp stream closed"))
+            .context("next command message")?
     }
 
     #[tracing::instrument(skip(self))]
-    async fn send_command(&mut self, message: RespMessage) -> anyhow::Result<()> {
+    async fn send_response(&mut self, message: RespMessage) -> anyhow::Result<()> {
         self.tcp_stream
             .send(message)
             .await

@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
     let socket = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), cli.port);
     run_listener(socket.into(), cli.max_connections)
         .await
-        .context("listen error")?;
+        .context("run listener")?;
 
     Ok(())
 }

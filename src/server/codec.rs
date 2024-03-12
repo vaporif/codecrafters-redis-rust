@@ -32,7 +32,7 @@ impl Decoder for RespCodec {
         trace!("bytes buffer {:?}", cursor);
         let buff_reader = BufReader::new(cursor);
         let mut decoder = RespDecoder::new(buff_reader);
-        let message = decoder.decode().context("decode resp error")?;
+        let message = decoder.decode().context("decode resp message")?;
 
         // NOTE: I expect all packets at once
         src.advance(message.encode().len());
@@ -77,7 +77,7 @@ impl TryFrom<RespMessage> for Command {
             bail!("empty messages");
         }
 
-        let RespMessage::Bulk(string) = messages.first().context("command expected")? else {
+        let RespMessage::Bulk(string) = messages.first().context("first resp string")? else {
             bail!("non bulk string for command");
         };
 
@@ -85,19 +85,18 @@ impl TryFrom<RespMessage> for Command {
         match string.as_ref() {
             "ping" => Ok(Command::Ping(None)),
             "echo" => {
-                let RespMessage::Bulk(argument) = messages.get(1).context("argument expected")?
-                else {
+                let RespMessage::Bulk(argument) = messages.get(1).context("first argument")? else {
                     bail!("non bulk string for argument");
                 };
 
                 Ok(Command::Echo(argument.to_string()))
             }
             "set" => {
-                let RespMessage::Bulk(key) = messages.get(1).context("key expected")? else {
+                let RespMessage::Bulk(key) = messages.get(1).context("first argument")? else {
                     bail!("non bulk string for key");
                 };
 
-                let RespMessage::Bulk(value) = messages.get(2).context("value expected")? else {
+                let RespMessage::Bulk(value) = messages.get(2).context("second argument")? else {
                     bail!("non bulk string for value");
                 };
 
@@ -108,12 +107,12 @@ impl TryFrom<RespMessage> for Command {
                 };
 
                 // TODO: there are other args!
-                if let Ok(RespMessage::Bulk(ttl_format)) = messages.get(3).context("ttl expected") {
-                    let RespMessage::Bulk(ttl) = messages.get(4).context("px expected")? else {
+                if let Ok(RespMessage::Bulk(ttl_format)) = messages.get(3).context("ttl get") {
+                    let RespMessage::Bulk(ttl) = messages.get(4).context("ttl value get")? else {
                         bail!("non integer string for px");
                     };
 
-                    let ttl = ttl.parse::<u64>().context("wrong conversion")?;
+                    let ttl = ttl.parse::<u64>().context("converting ttl to number")?;
 
                     let ttl_format = ttl_format.to_lowercase();
                     match ttl_format.as_ref() {
@@ -130,7 +129,7 @@ impl TryFrom<RespMessage> for Command {
                 Ok(Command::Set(set_data))
             }
             "get" => {
-                let RespMessage::Bulk(key) = messages.get(1).context("key expected")? else {
+                let RespMessage::Bulk(key) = messages.get(1).context("get key")? else {
                     bail!("non bulk string for key");
                 };
 
