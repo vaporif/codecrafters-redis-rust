@@ -4,16 +4,17 @@ use resp::{Decoder as RespDecoder, Value as RespMessage};
 use std::{
     io::{BufReader, Cursor},
     net::SocketAddr,
+    time::Duration,
 };
 use tokio::net::TcpStream;
 use tokio_util::codec::{Decoder, Encoder, Framed};
 
 use tokio::sync::oneshot;
 
-use crate::prelude::*;
+use crate::{prelude::*, server::SetData};
 use futures::{sink::SinkExt, StreamExt};
 
-use super::StoreCommand;
+use super::{SetArguments, StoreCommand};
 
 #[derive(DebugExtras)]
 #[allow(unused)]
@@ -41,10 +42,10 @@ impl ConnectionActor {
             let command_to_send = match command {
                 Command::Ping(_) => RespMessage::Bulk("pong".to_uppercase().to_string()),
                 Command::Echo(echo_string) => RespMessage::Bulk(echo_string),
-                Command::Set(key, value) => {
+                Command::Set(set_data) => {
                     let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
                     store_access_tx
-                        .send(StoreCommand::Set(key, value, reply_channel_tx))
+                        .send(StoreCommand::Set(set_data, reply_channel_tx))
                         .await
                         .context("sending set store command")?;
 
@@ -122,50 +123,8 @@ impl Decoder for RespCodec {
 
         // NOTE: I expect all packets at once
         src.advance(message.encode().len());
-
-        let RespMessage::Array(messages) = message else {
-            bail!("expected array for command");
-        };
-
-        trace!("messages parsed {:?}", messages);
-        if messages.is_empty() {
-            bail!("empty messages");
-        }
-
-        let RespMessage::Bulk(string) = messages.first().context("command expected")? else {
-            bail!("non bulk string for command");
-        };
-
-        let string = string.to_lowercase();
-        match string.as_ref() {
-            "ping" => Ok(Some(Command::Ping(None))),
-            "echo" => {
-                let RespMessage::Bulk(argument) = messages.get(1).context("argument expected")?
-                else {
-                    bail!("non bulk string for argument");
-                };
-
-                Ok(Some(Command::Echo(argument.to_string())))
-            }
-            "set" => {
-                let RespMessage::Bulk(key) = messages.get(1).context("key expected")? else {
-                    bail!("non bulk string for key");
-                };
-
-                let RespMessage::Bulk(value) = messages.get(2).context("value expected")? else {
-                    bail!("non bulk string for value");
-                };
-                Ok(Some(Command::Set(key.to_string(), value.to_string())))
-            }
-            "get" => {
-                let RespMessage::Bulk(key) = messages.get(1).context("key expected")? else {
-                    bail!("non bulk string for key");
-                };
-
-                Ok(Some(Command::Get(key.to_string())))
-            }
-            s => bail!("unknown command {:?}", s),
-        }
+        let command = Command::to_command(message)?;
+        Ok(Some(command))
     }
 }
 
@@ -188,6 +147,81 @@ enum Command {
     Ping(Option<String>),
     Pong,
     Echo(String),
-    Set(String, String),
+    Set(SetData),
     Get(String),
+}
+
+impl Command {
+    fn to_command(message: RespMessage) -> anyhow::Result<Self> {
+        let RespMessage::Array(messages) = message else {
+            bail!("expected array for command");
+        };
+
+        trace!("messages parsed {:?}", messages);
+        if messages.is_empty() {
+            bail!("empty messages");
+        }
+
+        let RespMessage::Bulk(string) = messages.first().context("command expected")? else {
+            bail!("non bulk string for command");
+        };
+
+        let string = string.to_lowercase();
+        match string.as_ref() {
+            "ping" => Ok(Command::Ping(None)),
+            "echo" => {
+                let RespMessage::Bulk(argument) = messages.get(1).context("argument expected")?
+                else {
+                    bail!("non bulk string for argument");
+                };
+
+                Ok(Command::Echo(argument.to_string()))
+            }
+            "set" => {
+                let RespMessage::Bulk(key) = messages.get(1).context("key expected")? else {
+                    bail!("non bulk string for key");
+                };
+
+                let RespMessage::Bulk(value) = messages.get(2).context("value expected")? else {
+                    bail!("non bulk string for value");
+                };
+
+                let mut set_data = SetData {
+                    key: key.to_string(),
+                    value: value.to_string(),
+                    arguments: SetArguments { ttl: None },
+                };
+
+                // TODO: there are other args!
+                if let Ok(RespMessage::Bulk(ttl_format)) = messages.get(3).context("ttl expected") {
+                    let RespMessage::Bulk(ttl) = messages.get(4).context("px expected")? else {
+                        bail!("non integer string for px");
+                    };
+
+                    let ttl = ttl.parse::<u64>().context("wrong conversion")?;
+
+                    let ttl_format = ttl_format.to_lowercase();
+                    match ttl_format.as_ref() {
+                        "ex" => {
+                            set_data.arguments.ttl = Some(Duration::from_secs(ttl));
+                        }
+                        "px" => {
+                            set_data.arguments.ttl = Some(Duration::from_millis(ttl));
+                        }
+                        _ => bail!("unknown args"),
+                    }
+                };
+
+                Ok(Command::Set(set_data))
+            }
+            "get" => {
+                let RespMessage::Bulk(key) = messages.get(1).context("key expected")? else {
+                    bail!("non bulk string for key");
+                };
+
+                Ok(Command::Get(key.to_string()))
+            }
+            s => bail!("unknown command {:?}", s),
+        }
+    }
 }

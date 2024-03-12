@@ -1,7 +1,9 @@
 use async_channel::{bounded, unbounded, Receiver, Sender};
+use std::time::Duration;
 use std::{collections::HashMap, net::SocketAddr};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
+use tokio::time::Instant;
 
 use crate::prelude::*;
 use connection::ConnectionActor;
@@ -56,9 +58,12 @@ fn run_connection_actors(
     });
 }
 
+struct Entry {}
+
 // TODO: Add sharding
 struct StorageActor {
     data: HashMap<String, String>,
+    expire_info: HashMap<String, Instant>,
     receive_channel: Receiver<StoreCommand>,
 }
 
@@ -66,6 +71,7 @@ impl StorageActor {
     fn new(receive_channel: Receiver<StoreCommand>) -> Self {
         Self {
             data: HashMap::new(),
+            expire_info: HashMap::new(),
             receive_channel,
         }
     }
@@ -81,8 +87,8 @@ impl StorageActor {
                         StoreCommand::Get(key, reply_channel_tx) => {
                             self.process_get_command(key, reply_channel_tx)
                         }
-                        StoreCommand::Set(key, value, reply_channel_tx) => {
-                            self.process_set_command(key, value, reply_channel_tx)
+                        StoreCommand::Set(set_data, reply_channel_tx) => {
+                            self.process_set_command(set_data, reply_channel_tx)
                         }
                     };
 
@@ -94,25 +100,47 @@ impl StorageActor {
         });
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, reply_channel_tx))]
     fn process_get_command(
-        &self,
+        &mut self,
         key: String,
         reply_channel_tx: GetReplyChannel,
     ) -> anyhow::Result<()> {
-        let data = self.data.get(&key).map(|s| s.to_string());
+        let data = if self
+            .expire_info
+            .get(&key)
+            .is_some_and(|expire| Instant::now() > *expire)
+        {
+            self.data.remove_entry(&key);
+            None
+        } else {
+            self.data.get(&key).map(|s| s.to_string())
+        };
+
         reply_channel_tx
             .send(data)
             .map_err(|_| anyhow::Error::msg(format!("could not send result for get {key}")))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, reply_channel_tx))]
     fn process_set_command(
         &mut self,
-        key: String,
-        value: String,
+        set_data: SetData,
         reply_channel_tx: SetReplyChannel,
     ) -> anyhow::Result<()> {
+        let SetData {
+            key,
+            value,
+            arguments,
+        } = set_data;
+
+        if let Some(ttl) = arguments.ttl {
+            let expires_at = Instant::now() + ttl;
+            self.expire_info
+                .entry(key.clone())
+                .and_modify(|e| *e = expires_at)
+                .or_insert(expires_at);
+        }
         self.data
             .entry(key.clone())
             .and_modify(|e| *e = value.clone())
@@ -130,5 +158,17 @@ pub type SetReplyChannel = oneshot::Sender<Result<()>>;
 #[derive(Debug)]
 pub enum StoreCommand {
     Get(String, GetReplyChannel),
-    Set(String, String, SetReplyChannel),
+    Set(SetData, SetReplyChannel),
+}
+
+#[derive(Debug)]
+pub struct SetData {
+    pub key: String,
+    pub value: String,
+    pub arguments: SetArguments,
+}
+
+#[derive(Debug)]
+pub struct SetArguments {
+    pub ttl: Option<Duration>,
 }
