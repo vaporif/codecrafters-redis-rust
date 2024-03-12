@@ -17,7 +17,7 @@ pub async fn run_listener(socket: SocketAddr, max_connections: usize) -> anyhow:
         bounded::<ConnectionActor>(max_connections);
     let (store_access_tx, store_access_rx) = unbounded::<StoreCommand>();
 
-    run_connection_actors(connection_processor_rx, store_access_tx);
+    run_connections_processor(connection_processor_rx, store_access_tx);
 
     let storage_actor = StorageActor::new(store_access_rx);
     storage_actor.run_actor();
@@ -37,12 +37,12 @@ pub async fn run_listener(socket: SocketAddr, max_connections: usize) -> anyhow:
 }
 
 #[instrument(skip_all)]
-fn run_connection_actors(
+fn run_connections_processor(
     connection_processor_rx: Receiver<ConnectionActor>,
     store_access_tx: Sender<StoreCommand>,
 ) {
     tokio::spawn(async move {
-        trace!("connection actors loop started");
+        trace!("connections processor started");
         loop {
             while let Ok(mut connection) = connection_processor_rx.recv().await {
                 trace!("accepted new connection {:?}", &connection);
