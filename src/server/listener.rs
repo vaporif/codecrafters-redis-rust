@@ -13,10 +13,11 @@ pub async fn run_listener(socket: SocketAddr, max_connections: usize) -> anyhow:
         .await
         .context("failed to listen")?;
 
-    let (connection_snd, connections_processor) = bounded::<ConnectionActor>(max_connections);
+    let (connection_processor_tx, connection_processor_rx) =
+        bounded::<ConnectionActor>(max_connections);
     let (store_access_tx, store_access_rx) = unbounded::<StoreCommand>();
 
-    run_connection_actors(connections_processor, store_access_tx);
+    run_connection_actors(connection_processor_rx, store_access_tx);
 
     let storage_actor = StorageActor::new(store_access_rx);
     storage_actor.run_actor();
@@ -26,7 +27,7 @@ pub async fn run_listener(socket: SocketAddr, max_connections: usize) -> anyhow:
             Ok((tcp_stream, socket)) => {
                 let connection = ConnectionActor::new(socket, tcp_stream);
 
-                if let Err(e) = connection_snd.send(connection).await {
+                if let Err(e) = connection_processor_tx.send(connection).await {
                     bail!("processing channel error {e}");
                 }
             }
@@ -37,13 +38,13 @@ pub async fn run_listener(socket: SocketAddr, max_connections: usize) -> anyhow:
 
 #[instrument(skip_all)]
 fn run_connection_actors(
-    receiver_tx: Receiver<ConnectionActor>,
+    connection_processor_rx: Receiver<ConnectionActor>,
     store_access_tx: Sender<StoreCommand>,
 ) {
     tokio::spawn(async move {
         trace!("connection actors loop started");
         loop {
-            while let Ok(mut connection) = receiver_tx.recv().await {
+            while let Ok(mut connection) = connection_processor_rx.recv().await {
                 trace!("accepted new connection {:?}", &connection);
                 let store_access_tx = store_access_tx.clone();
                 tokio::spawn(async move {
