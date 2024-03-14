@@ -7,7 +7,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 mod cli;
 pub mod prelude;
 mod server;
-mod util;
 use crate::prelude::*;
 
 fn init_tracing() {
@@ -15,12 +14,12 @@ fn init_tracing() {
         .with(tracing_subscriber::fmt::layer())
         .with(EnvFilter::from_default_env());
 
-    if cfg!(debug_assertions) {
-        subscriber.with(console_subscriber::spawn()).init();
-        trace!("tokio console enabled");
-    } else {
-        subscriber.init();
-    };
+    // if cfg!(debug_assertions) {
+    // subscriber.with(console_subscriber::spawn()).init();
+    // trace!("tokio console enabled");
+    // } else {
+    subscriber.init();
+    // };
 }
 
 #[tokio::main]

@@ -1,8 +1,12 @@
-use crate::prelude::*;
+use crate::{prelude::*, server::codec::RespCodec};
 use async_channel::{bounded, unbounded, Receiver, Sender};
+use futures::SinkExt;
 use rand::{distributions::Alphanumeric, Rng};
 use std::net::SocketAddr;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
+use tokio_util::codec::Framed;
+
+use resp::Value as RespMessage;
 
 use super::{
     commands::StoreCommand, connection_actor::ConnectionActor, storage_actor::StorageActor,
@@ -13,13 +17,13 @@ pub enum ServerMode {
         master_replid: String,
         master_repl_offset: u64,
     },
-    Slave(SocketAddr),
+    Slave(MasterAddr),
 }
 
 impl ServerMode {
-    fn new(replication_ip: Option<SocketAddr>) -> Self {
+    fn new(replication_ip: Option<MasterAddr>) -> Self {
         match replication_ip {
-            Some(socket_addr) => ServerMode::Slave(socket_addr),
+            Some(master_addr) => ServerMode::Slave(master_addr),
             None => {
                 let random_string: String = rand::thread_rng()
                     .sample_iter(&Alphanumeric)
@@ -35,6 +39,7 @@ impl ServerMode {
     }
 }
 
+#[derive(Debug)]
 pub struct Server {
     socket: SocketAddr,
     max_connections: usize,
@@ -43,19 +48,23 @@ pub struct Server {
 
 // TODO: Refactor
 impl Server {
+    #[instrument]
     pub fn new(
         socket: SocketAddr,
         max_connections: usize,
-        replication_ip: Option<SocketAddr>,
+        master_addr: Option<MasterAddr>,
     ) -> Self {
         Self {
             socket,
             max_connections,
-            server_mode: ServerMode::new(replication_ip),
+            server_mode: ServerMode::new(master_addr),
         }
     }
 
+    #[instrument]
     pub async fn run(&self) -> anyhow::Result<()> {
+        self.handle_replication().await.context("replication")?;
+
         let listener = TcpListener::bind(&self.socket)
             .await
             .context("listening on port")?;
@@ -82,6 +91,28 @@ impl Server {
                 Err(e) => error!("Failed to accept connection {:?}", e),
             }
         }
+    }
+
+    // TODO: Extract tcp resp framed
+    #[instrument(skip(self))]
+    async fn handle_replication(&self) -> anyhow::Result<()> {
+        let ServerMode::Slave(ref master_addr) = self.server_mode else {
+            return Ok(());
+        };
+
+        trace!("connecting to {:?}", master_addr);
+
+        let master_connection = TcpStream::connect(master_addr)
+            .await
+            .context("failed to connect to master")?;
+        let mut master_connection = Framed::new(master_connection, RespCodec);
+        master_connection
+            .send(RespMessage::Array(vec![RespMessage::Bulk(
+                "ping".to_string(),
+            )]))
+            .await?;
+
+        Ok(())
     }
 
     #[instrument(skip_all)]

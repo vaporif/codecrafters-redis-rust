@@ -1,6 +1,6 @@
-use std::{net::SocketAddr, usize};
+use std::usize;
 
-use crate::{prelude::*, util::parse_ip};
+use crate::prelude::*;
 use clap::{arg, command, Parser};
 
 #[derive(Parser, Debug)]
@@ -15,7 +15,7 @@ pub struct Cli {
 }
 
 impl Cli {
-    pub fn replicaof(&self) -> anyhow::Result<Option<SocketAddr>> {
+    pub fn replicaof(&self) -> anyhow::Result<Option<MasterAddr>> {
         let Some(values) = self.replicaof.clone() else {
             return Ok(None);
         };
@@ -25,8 +25,7 @@ impl Cli {
         };
 
         let port: u16 = port.parse().context("could not parse replicaof port")?;
-        let ip = parse_ip(host).context("failed to parse replicaof host")?;
 
-        Ok(Some(SocketAddr::new(ip, port)))
+        Ok(Some((host.clone(), port)))
     }
 }

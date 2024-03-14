@@ -7,7 +7,7 @@ use tokio_util::codec::Framed;
 
 use tokio::sync::oneshot;
 
-use super::{codec::RespCodec, commands::*, listener::ServerMode};
+use super::{codec::RespCodec, commands::*, core_listener::ServerMode};
 use crate::prelude::*;
 
 #[derive(DebugExtras)]
@@ -16,6 +16,7 @@ pub struct ConnectionActor {
     pub socket: SocketAddr,
     #[debug_ignore]
     tcp_stream: Framed<TcpStream, RespCodec>,
+    #[debug_ignore]
     server_mode: ServerMode,
 }
 
