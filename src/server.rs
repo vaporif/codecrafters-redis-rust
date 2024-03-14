@@ -4,4 +4,4 @@ mod connection_actor;
 mod listener;
 mod storage_actor;
 
-pub use listener::run_listener;
+pub use listener::Server;

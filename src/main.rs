@@ -2,7 +2,6 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 
 use clap::Parser;
 use cli::Cli;
-use server::run_listener;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 mod cli;
@@ -31,9 +30,9 @@ async fn main() -> Result<()> {
     let replicaof = cli.replicaof()?;
 
     let socket = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), cli.port);
-    run_listener(socket.into(), cli.max_connections, replicaof.into())
-        .await
-        .context("run listener")?;
+    let server = server::Server::new(socket.into(), cli.max_connections, replicaof);
+
+    server.run().await.context("run listener")?;
 
     Ok(())
 }

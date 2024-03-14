@@ -69,10 +69,7 @@ impl ConnectionActor {
                 }
                 // TODO: would need serde :(
                 Command::Info(info_data) => match info_data {
-                    InfoCommand::Replication => match self.server_mode {
-                        ServerMode::Master => RespMessage::Bulk("role:master".to_string()),
-                        ServerMode::Slave(_) => RespMessage::Bulk("role:slave".to_string()),
-                    },
+                    InfoCommand::Replication => self.server_mode.to_resp(),
                 },
                 _ => bail!("unexpected"),
             };
@@ -99,5 +96,23 @@ impl ConnectionActor {
             .send(message)
             .await
             .context("sending message")
+    }
+}
+
+impl ServerMode {
+    fn to_resp(&self) -> RespMessage {
+        match self {
+            ServerMode::Master {
+                master_replid,
+                master_repl_offset,
+            } => {
+                let role = "role:master".to_string();
+                let master_replid = format!("master_replid:{master_replid}");
+                let master_repl_offset = format!("master_repl_offset:{master_repl_offset}");
+                let string = [role, master_replid, master_repl_offset].join("\n");
+                RespMessage::Bulk(string)
+            }
+            ServerMode::Slave(_) => RespMessage::Bulk("role:slave".to_string()),
+        }
     }
 }

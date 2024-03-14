@@ -989,6 +989,7 @@ dependencies = [
  "console-subscriber",
  "derive-debug-extras",
  "futures",
+ "rand",
  "resp",
  "thiserror",
  "tokio",
