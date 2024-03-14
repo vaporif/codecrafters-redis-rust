@@ -7,7 +7,7 @@ use tokio_util::codec::Framed;
 
 use tokio::sync::oneshot;
 
-use super::{codec::RespCodec, commands::*};
+use super::{codec::RespCodec, commands::*, listener::ServerMode};
 use crate::prelude::*;
 
 #[derive(DebugExtras)]
@@ -16,12 +16,17 @@ pub struct ConnectionActor {
     pub socket: SocketAddr,
     #[debug_ignore]
     tcp_stream: Framed<TcpStream, RespCodec>,
+    server_mode: ServerMode,
 }
 
 impl ConnectionActor {
-    pub fn new(socket: SocketAddr, tcp_stream: TcpStream) -> Self {
+    pub fn new(socket: SocketAddr, tcp_stream: TcpStream, server_mode: ServerMode) -> Self {
         let tcp_stream = Framed::new(tcp_stream, RespCodec);
-        Self { socket, tcp_stream }
+        Self {
+            socket,
+            tcp_stream,
+            server_mode,
+        }
     }
 
     #[instrument(skip(store_access_tx))]
@@ -64,7 +69,10 @@ impl ConnectionActor {
                 }
                 // TODO: would need serde :(
                 Command::Info(info_data) => match info_data {
-                    InfoCommand::Replication => RespMessage::Bulk("role:master".to_string()),
+                    InfoCommand::Replication => match self.server_mode {
+                        ServerMode::Master => RespMessage::Bulk("role:master".to_string()),
+                        ServerMode::Slave(_) => RespMessage::Bulk("role:slave".to_string()),
+                    },
                 },
                 _ => bail!("unexpected"),
             };

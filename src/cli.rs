@@ -1,5 +1,6 @@
-use std::usize;
+use std::{net::SocketAddr, usize};
 
+use crate::{prelude::*, util::parse_ip};
 use clap::{arg, command, Parser};
 
 #[derive(Parser, Debug)]
@@ -9,6 +10,23 @@ pub struct Cli {
     pub port: u16,
     #[arg(short, long, default_value_t = 10_000)]
     pub max_connections: usize,
-    #[arg(short, long)]
-    pub tokio_console: bool,
+    #[arg(short, long, value_names = ["MASTER_HOST", "MASTER_PORT"], number_of_values = 2, value_delimiter = ' ')]
+    replicaof: Option<Vec<String>>,
+}
+
+impl Cli {
+    pub fn replicaof(&self) -> anyhow::Result<Option<SocketAddr>> {
+        let Some(values) = self.replicaof.clone() else {
+            return Ok(None);
+        };
+
+        let [host, port] = values.as_slice() else {
+            unreachable!()
+        };
+
+        let port: u16 = port.parse().context("could not parse replicaof port")?;
+        let ip = parse_ip(host).context("failed to parse replicaof host")?;
+
+        Ok(Some(SocketAddr::new(ip, port)))
+    }
 }

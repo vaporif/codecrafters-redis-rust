@@ -7,8 +7,26 @@ use crate::prelude::*;
 use super::{
     commands::StoreCommand, connection_actor::ConnectionActor, storage_actor::StorageActor,
 };
+#[derive(Debug, Clone)]
+pub enum ServerMode {
+    Master,
+    Slave(SocketAddr),
+}
 
-pub async fn run_listener(socket: SocketAddr, max_connections: usize) -> anyhow::Result<()> {
+impl From<Option<SocketAddr>> for ServerMode {
+    fn from(value: Option<SocketAddr>) -> Self {
+        match value {
+            Some(socket_addr) => ServerMode::Slave(socket_addr),
+            None => ServerMode::Master,
+        }
+    }
+}
+
+pub async fn run_listener(
+    socket: SocketAddr,
+    max_connections: usize,
+    server_mode: ServerMode,
+) -> anyhow::Result<()> {
     let listener = TcpListener::bind(socket)
         .await
         .context("listening on port")?;
@@ -25,7 +43,7 @@ pub async fn run_listener(socket: SocketAddr, max_connections: usize) -> anyhow:
     loop {
         match listener.accept().await {
             Ok((tcp_stream, socket)) => {
-                let connection = ConnectionActor::new(socket, tcp_stream);
+                let connection = ConnectionActor::new(socket, tcp_stream, server_mode.clone());
 
                 if let Err(e) = connection_processor_tx.send(connection).await {
                     bail!("processing channel error {e}");
