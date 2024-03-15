@@ -55,6 +55,26 @@ impl ConnectionActor {
                 }
                 RedisMessage::ReplConfCapa { .. } => RedisMessage::Ok.into(),
                 RedisMessage::ReplConfPort { .. } => RedisMessage::Ok.into(),
+                RedisMessage::Psync {
+                    replication_id,
+                    offset,
+                } => match (replication_id.as_str(), offset) {
+                    ("?", -1) => {
+                        let ServerMode::Master {
+                            ref master_replid, ..
+                        } = self.server_mode
+                        else {
+                            bail!("in slave mode")
+                        };
+
+                        RedisMessage::FullResync {
+                            replication_id: master_replid.clone(),
+                            offset: 0,
+                        }
+                        .into()
+                    }
+                    _ => todo!(),
+                },
                 RedisMessage::Get(key) => {
                     let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
                     store_access_tx

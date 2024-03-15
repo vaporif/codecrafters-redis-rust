@@ -209,7 +209,7 @@ impl RedisMessage {
                 match subcommand.to_lowercase().as_str() {
                     "listening-port" => {
                         let port = array_command.args.get(1).context("replconf port")?;
-                        let port: u16 = port.parse().context("parse port")?;
+                        let port = port.parse().context("parse port")?;
                         Ok(RedisMessage::ReplConfPort { port })
                     }
                     "capa" => {
@@ -223,6 +223,19 @@ impl RedisMessage {
                     }
                     s => bail!("unknown replconf {:?}", s),
                 }
+            }
+            "psync" => {
+                let replication_id = array_command
+                    .args
+                    .first()
+                    .context("psync repl_id")?
+                    .to_string();
+                let offset = array_command.args.get(1).context("psync offset")?;
+                let offset = offset.parse().context("psync offset parse")?;
+                Ok(RedisMessage::Psync {
+                    replication_id,
+                    offset,
+                })
             }
             "info" => {
                 let subcommand = array_command.args.first().context("info subcommand")?;
