@@ -7,7 +7,7 @@ use tokio_util::codec::Framed;
 use tokio::sync::oneshot;
 
 use super::{codec::RespCodec, commands::*, core_listener::ServerMode, error::TransportError};
-use crate::prelude::*;
+use crate::{prelude::*, server::rdb::Rdb};
 
 #[derive(DebugExtras)]
 #[allow(unused)]
@@ -56,7 +56,7 @@ impl ConnectionActor {
     async fn hanlde_connection(&mut self) -> Result<(), TransportError> {
         let command = self.next_command().await?;
 
-        let response_message = match command {
+        let message = match command {
             RedisMessage::Ping(_) => RedisMessage::Pong,
             RedisMessage::Echo(echo_string) => RedisMessage::EchoResponse(echo_string),
             RedisMessage::Set(set_data) => {
@@ -87,10 +87,15 @@ impl ConnectionActor {
                         )));
                     };
 
-                    RedisMessage::FullResync {
+                    let resync_msq = RedisMessage::FullResync {
                         replication_id: master_replid.clone(),
                         offset: 0,
-                    }
+                    };
+
+                    self.tcp_stream.send(resync_msq).await?;
+
+                    let db = Rdb::empty();
+                    RedisMessage::DbTransfer(db.to_vec())
                 }
                 _ => todo!(),
             },
@@ -115,7 +120,7 @@ impl ConnectionActor {
             e => RedisMessage::Err(format!("unknown command {:?}", e).to_string()),
         };
 
-        self.send_response(response_message).await?;
+        self.tcp_stream.send(message).await?;
 
         Ok(())
     }

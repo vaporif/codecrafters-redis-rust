@@ -38,6 +38,7 @@ pub enum RedisMessage {
     Get(String),
     Psync { replication_id: String, offset: i32 },
     FullResync { replication_id: String, offset: i32 },
+    DbTransfer(Vec<u8>),
     ReplConfPort { port: u16 },
     ReplConfCapa { capa: String },
     Info(InfoCommand),

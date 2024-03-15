@@ -53,12 +53,22 @@ impl Encoder<RedisMessage> for RespCodec {
         item: RedisMessage,
         dst: &mut bytes::BytesMut,
     ) -> std::prelude::v1::Result<(), Self::Error> {
-        let item: RESP = item.into();
-        dst.extend_from_slice(
-            &ser::to_string(&item)
-                .context("serializing resp")?
-                .into_bytes(),
-        );
+        match item {
+            RedisMessage::DbTransfer(db) => {
+                let mut data = format!("${}\r\n", db.len()).as_bytes().to_vec();
+                data.extend(db);
+                dst.extend_from_slice(&data)
+            }
+            item => {
+                let item: RESP = item.into();
+                dst.extend_from_slice(
+                    &ser::to_string(&item)
+                        .context("serialize resp")?
+                        .into_bytes(),
+                );
+            }
+        }
+
         Ok(())
     }
 }
@@ -296,6 +306,9 @@ impl From<RedisMessage> for RESP {
             RedisMessage::CacheFound(val) => bulk!(val),
             RedisMessage::CacheNotFound => bulk_null!(),
             RedisMessage::InfoResponse(server_mode) => server_mode.to_resp(),
+            RedisMessage::DbTransfer(_) => {
+                unreachable!("thank god redis for not following their own protocol, won't work")
+            }
         }
     }
 }
