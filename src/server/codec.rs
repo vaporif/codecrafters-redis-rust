@@ -1,3 +1,4 @@
+use super::error::TransportError;
 use bytes::Buf;
 use itertools::{Either, Itertools};
 use serde_resp::{array, bulk, bulk_null, de, err_str, ser, simple, RESP};
@@ -16,7 +17,7 @@ pub struct RespCodec;
 impl Decoder for RespCodec {
     type Item = RedisMessage;
 
-    type Error = anyhow::Error;
+    type Error = TransportError;
 
     #[instrument]
     fn decode(
@@ -32,8 +33,7 @@ impl Decoder for RespCodec {
 
         trace!("bytes buffer {:?}", cursor);
         let mut buff_reader = BufReader::new(cursor);
-        let message: serde_resp::RESP =
-            de::from_buf_reader(&mut buff_reader).context("decoding resp")?;
+        let message: serde_resp::RESP = de::from_buf_reader(&mut buff_reader)?;
 
         let final_position = buff_reader.into_inner().position();
 
@@ -64,15 +64,19 @@ impl Encoder<RedisMessage> for RespCodec {
 }
 
 impl TryFrom<RESP> for RedisMessage {
-    type Error = anyhow::Error;
+    type Error = super::error::TransportError;
 
     fn try_from(message: RESP) -> std::prelude::v1::Result<Self, Self::Error> {
         match message {
             serde_resp::RESPType::SimpleString(string) => {
                 RedisMessage::parse_string_message(&string)
             }
-            serde_resp::RESPType::Error(error) => bail!(error),
-            serde_resp::RESPType::Integer(number) => bail!("unexpected number {number}"),
+            serde_resp::RESPType::Error(error) => {
+                Err(TransportError::ResponseError(error.to_string()))
+            }
+            serde_resp::RESPType::Integer(_) => Err(TransportError::Other(anyhow!(
+                "integer not expected".to_string()
+            ))),
             serde_resp::RESPType::BulkString(bytes) => {
                 let bytes = bytes.context("empty bytes")?;
                 let string = resp_bulkstring_to_string(bytes)?;
@@ -80,7 +84,7 @@ impl TryFrom<RESP> for RedisMessage {
             }
             serde_resp::RESPType::Array(data) => {
                 let Some(data) = data else {
-                    bail!("no data returned");
+                    return Err(TransportError::Other(anyhow!("array empty".to_string())));
                 };
 
                 RedisMessage::parse_array_message(data)
@@ -129,7 +133,7 @@ impl RedisArrayCommand {
 
 impl RedisMessage {
     #[instrument]
-    fn parse_string_message(message: &str) -> anyhow::Result<RedisMessage> {
+    fn parse_string_message(message: &str) -> anyhow::Result<RedisMessage, TransportError> {
         match message.to_lowercase().as_str() {
             "ping" => Ok(RedisMessage::Ping(None)),
             "pong" => Ok(RedisMessage::Pong),
@@ -150,14 +154,14 @@ impl RedisMessage {
                     offset,
                 })
             }
-            s => bail!("unknown string command {}", s),
+            s => Err(TransportError::UnknownCommand(s.to_string())),
         }
     }
 
     // TODO: swap_remove instead of clone?
     // break into subfunctions
     #[instrument]
-    fn parse_array_message(messages: Vec<RESP>) -> anyhow::Result<RedisMessage> {
+    fn parse_array_message(messages: Vec<RESP>) -> Result<RedisMessage, TransportError> {
         let array_command = RedisArrayCommand::from(messages)?;
 
         let command = array_command.command.to_lowercase();
@@ -190,7 +194,10 @@ impl RedisMessage {
                         "px" => {
                             set_data.arguments.ttl = Some(Duration::from_millis(ttl));
                         }
-                        _ => bail!("unknown args"),
+                        s => Err(TransportError::UnknownCommand(format!(
+                            "unknown args {} for command set",
+                            s
+                        )))?,
                     }
                 }
 
@@ -222,7 +229,7 @@ impl RedisMessage {
 
                         Ok(RedisMessage::ReplConfCapa { capa })
                     }
-                    s => bail!("unknown replconf {:?}", s),
+                    s => Err(anyhow::anyhow!("unknown replconf {:?}", s))?,
                 }
             }
             "psync" => {
@@ -244,10 +251,10 @@ impl RedisMessage {
                 let subcommand = subcommand.to_lowercase();
                 match subcommand.as_str() {
                     "replication" => Ok(RedisMessage::Info(InfoCommand::Replication)),
-                    _ => bail!("unsupported command"),
+                    s => Err(TransportError::UnknownCommand(s.to_string())),
                 }
             }
-            s => bail!("unknown array command {:?}", s),
+            s => Err(TransportError::UnknownCommand(s.to_string())),
         }
     }
 }

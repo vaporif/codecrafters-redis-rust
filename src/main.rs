@@ -1,4 +1,7 @@
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::{
+    env,
+    net::{Ipv4Addr, SocketAddrV4},
+};
 
 use clap::Parser;
 use cli::Cli;
@@ -10,6 +13,9 @@ mod server;
 use crate::prelude::*;
 
 fn init_tracing() {
+    if env::var("RUST_LOG").is_err() {
+        env::set_var("RUST_LOG", "trace")
+    }
     let subscriber = tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
         .with(EnvFilter::from_default_env());

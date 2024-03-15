@@ -6,7 +6,7 @@ use tokio_util::codec::Framed;
 
 use tokio::sync::oneshot;
 
-use super::{codec::RespCodec, commands::*, core_listener::ServerMode};
+use super::{codec::RespCodec, commands::*, core_listener::ServerMode, error::TransportError};
 use crate::prelude::*;
 
 #[derive(DebugExtras)]
@@ -93,7 +93,7 @@ impl ConnectionActor {
                         RedisMessage::InfoResponse(self.server_mode.clone())
                     }
                 },
-                s => bail!("unexpected command {:?}", s),
+                e => RedisMessage::Err(format!("unknown command {:?}", e).to_string()),
             };
 
             self.send_response(response_message)
@@ -102,21 +102,21 @@ impl ConnectionActor {
         }
     }
 
-    // TODO: cover connection shutdown
     #[tracing::instrument(skip(self))]
-    async fn next_command(&mut self) -> anyhow::Result<RedisMessage> {
-        self.tcp_stream
-            .next()
-            .await
-            .map(|m| m.context("tcp stream closed"))
-            .context("next command message")?
+    async fn next_command(&mut self) -> Result<RedisMessage, TransportError> {
+        let message = self.tcp_stream.next().await;
+        match message {
+            Some(r) => r,
+            None => Err(TransportError::EmptyResponse()),
+        }
     }
 
     #[tracing::instrument(skip(self))]
-    async fn send_response(&mut self, message: RedisMessage) -> anyhow::Result<()> {
-        self.tcp_stream
+    async fn send_response(&mut self, message: RedisMessage) -> Result<(), TransportError> {
+        Ok(self
+            .tcp_stream
             .send(message)
             .await
-            .context("sending message")
+            .context("sending message")?)
     }
 }
