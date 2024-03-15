@@ -1,12 +1,13 @@
-use crate::{prelude::*, server::codec::RespCodec};
+use crate::{
+    prelude::*,
+    server::{codec::RespCodec, commands::Message},
+};
 use async_channel::{bounded, unbounded, Receiver, Sender};
-use futures::SinkExt;
+use futures::{SinkExt, StreamExt};
 use rand::{distributions::Alphanumeric, Rng};
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::Framed;
-
-use resp::Value as RespMessage;
 
 use super::{
     commands::StoreCommand, connection_actor::ConnectionActor, storage_actor::StorageActor,
@@ -93,7 +94,7 @@ impl Server {
         }
     }
 
-    // TODO: Extract tcp resp framed
+    // TODO: Extract tcp resp framed, refactor
     #[instrument(skip(self))]
     async fn handle_replication(&self) -> anyhow::Result<()> {
         let ServerMode::Slave(ref master_addr) = self.server_mode else {
@@ -106,11 +107,50 @@ impl Server {
             .await
             .context("failed to connect to master")?;
         let mut master_connection = Framed::new(master_connection, RespCodec);
+
+        master_connection.send(Message::Ping(None).into()).await?;
+
+        let Message::Pong = master_connection
+            .next()
+            .await
+            .context("expecting pong response")??
+        else {
+            bail!("expecting pong reply")
+        };
+
         master_connection
-            .send(RespMessage::Array(vec![RespMessage::Bulk(
-                "ping".to_string(),
-            )]))
+            .send(
+                Message::ReplConfPort {
+                    port: self.socket.port(),
+                }
+                .into(),
+            )
             .await?;
+
+        let Message::Ok = master_connection
+            .next()
+            .await
+            .context("expecting repl response")??
+        else {
+            bail!("expecting ok reply")
+        };
+
+        master_connection
+            .send(
+                Message::ReplConfCapa {
+                    capa: "psync2".to_string(),
+                }
+                .into(),
+            )
+            .await?;
+
+        let Message::Ok = master_connection
+            .next()
+            .await
+            .context("expecting repl response")??
+        else {
+            bail!("expecting ok reply")
+        };
 
         Ok(())
     }

@@ -39,9 +39,9 @@ impl ConnectionActor {
                 .context("next command from client")?;
 
             let response_message = match command {
-                Command::Ping(_) => RespMessage::Bulk("pong".to_uppercase().to_string()),
-                Command::Echo(echo_string) => RespMessage::Bulk(echo_string),
-                Command::Set(set_data) => {
+                Message::Ping(_) => RespMessage::Bulk("pong".to_uppercase().to_string()),
+                Message::Echo(echo_string) => RespMessage::Bulk(echo_string),
+                Message::Set(set_data) => {
                     let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
                     store_access_tx
                         .send(StoreCommand::Set(set_data, reply_channel_tx))
@@ -53,7 +53,7 @@ impl ConnectionActor {
                         Err(e) => RespMessage::Error(format!("error {:?}", e)),
                     }
                 }
-                Command::Get(key) => {
+                Message::Get(key) => {
                     let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
                     store_access_tx
                         .send(StoreCommand::Get(key, reply_channel_tx))
@@ -69,7 +69,7 @@ impl ConnectionActor {
                     }
                 }
                 // TODO: would need serde :(
-                Command::Info(info_data) => match info_data {
+                Message::Info(info_data) => match info_data {
                     InfoCommand::Replication => self.server_mode.to_resp(),
                 },
                 _ => bail!("unexpected"),
@@ -83,7 +83,7 @@ impl ConnectionActor {
 
     // TODO: cover connection shutdown
     #[tracing::instrument(skip(self))]
-    async fn next_command(&mut self) -> anyhow::Result<Command> {
+    async fn next_command(&mut self) -> anyhow::Result<Message> {
         self.tcp_stream
             .next()
             .await

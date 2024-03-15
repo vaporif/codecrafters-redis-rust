@@ -13,7 +13,7 @@ use crate::prelude::*;
 pub struct RespCodec;
 
 impl Decoder for RespCodec {
-    type Item = Command;
+    type Item = Message;
 
     type Error = anyhow::Error;
 
@@ -36,7 +36,7 @@ impl Decoder for RespCodec {
 
         // NOTE: I expect all packets at once
         src.advance(message.encode().len());
-        let command = Command::try_from(message)?;
+        let command = Message::try_from(message)?;
         Ok(Some(command))
     }
 }
@@ -44,6 +44,7 @@ impl Decoder for RespCodec {
 impl Encoder<RespMessage> for RespCodec {
     type Error = anyhow::Error;
 
+    #[instrument]
     fn encode(
         &mut self,
         item: RespMessage,
@@ -55,89 +56,119 @@ impl Encoder<RespMessage> for RespCodec {
 }
 
 // TODO: refactor mapping of commands, maybe use serde?
-impl TryFrom<RespMessage> for Command {
+impl TryFrom<RespMessage> for Message {
     type Error = anyhow::Error;
 
     fn try_from(message: RespMessage) -> std::prelude::v1::Result<Self, Self::Error> {
-        let RespMessage::Array(messages) = message else {
-            bail!("expected array for command");
-        };
+        match message {
+            RespMessage::Null => todo!(),
+            RespMessage::NullArray => todo!(),
+            RespMessage::String(message) => match message.to_lowercase().as_str() {
+                "ping" => Ok(Message::Ping(None)),
+                "pong" => Ok(Message::Pong),
+                "ok" => Ok(Message::Ok),
+                s => bail!("unknown message {}", s),
+            },
+            RespMessage::Error(_) => todo!(),
+            RespMessage::Integer(_) => todo!(),
+            RespMessage::Bulk(message) => match message.to_lowercase().as_str() {
+                "ping" => Ok(Message::Ping(None)),
+                "pong" => Ok(Message::Pong),
+                "ok" => Ok(Message::Ok),
+                s => bail!("unknown message {}", s),
+            },
+            RespMessage::BufBulk(_) => todo!(),
+            RespMessage::Array(messages) => {
+                trace!("messages parsed {:?}", messages);
+                if messages.is_empty() {
+                    bail!("empty messages");
+                }
 
-        trace!("messages parsed {:?}", messages);
-        if messages.is_empty() {
-            bail!("empty messages");
-        }
-
-        let RespMessage::Bulk(string) = messages.first().context("first resp string")? else {
-            bail!("non bulk string for command");
-        };
-
-        let string = string.to_lowercase();
-        match string.as_ref() {
-            "ping" => Ok(Command::Ping(None)),
-            "echo" => {
-                let RespMessage::Bulk(argument) = messages.get(1).context("first argument")? else {
-                    bail!("non bulk string for argument");
+                let RespMessage::Bulk(string) = messages.first().context("first resp string")?
+                else {
+                    bail!("non bulk string for command");
                 };
 
-                Ok(Command::Echo(argument.to_string()))
-            }
-            "set" => {
-                let RespMessage::Bulk(key) = messages.get(1).context("first argument")? else {
-                    bail!("non bulk string for key");
-                };
+                let string = string.to_lowercase();
+                match string.as_ref() {
+                    "ping" => Ok(Message::Ping(None)),
+                    "pong" => Ok(Message::Pong),
+                    "echo" => {
+                        let RespMessage::Bulk(argument) =
+                            messages.get(1).context("first argument")?
+                        else {
+                            bail!("non bulk string for argument");
+                        };
 
-                let RespMessage::Bulk(value) = messages.get(2).context("second argument")? else {
-                    bail!("non bulk string for value");
-                };
-
-                let mut set_data = SetData {
-                    key: key.to_string(),
-                    value: value.to_string(),
-                    arguments: SetArguments { ttl: None },
-                };
-
-                // TODO: there are other args!
-                if let Ok(RespMessage::Bulk(ttl_format)) = messages.get(3).context("ttl get") {
-                    let RespMessage::Bulk(ttl) = messages.get(4).context("ttl value get")? else {
-                        bail!("non integer string for px");
-                    };
-
-                    let ttl = ttl.parse::<u64>().context("converting ttl to number")?;
-
-                    let ttl_format = ttl_format.to_lowercase();
-                    match ttl_format.as_ref() {
-                        "ex" => {
-                            set_data.arguments.ttl = Some(Duration::from_secs(ttl));
-                        }
-                        "px" => {
-                            set_data.arguments.ttl = Some(Duration::from_millis(ttl));
-                        }
-                        _ => bail!("unknown args"),
+                        Ok(Message::Echo(argument.to_string()))
                     }
-                };
+                    "set" => {
+                        let RespMessage::Bulk(key) = messages.get(1).context("first argument")?
+                        else {
+                            bail!("non bulk string for key");
+                        };
 
-                Ok(Command::Set(set_data))
-            }
-            "get" => {
-                let RespMessage::Bulk(key) = messages.get(1).context("get key")? else {
-                    bail!("non bulk string for key");
-                };
+                        let RespMessage::Bulk(value) =
+                            messages.get(2).context("second argument")?
+                        else {
+                            bail!("non bulk string for value");
+                        };
 
-                Ok(Command::Get(key.to_string()))
-            }
-            "info" => {
-                let RespMessage::Bulk(command_type) = messages.get(1).context("get type")? else {
-                    bail!("non bulk string for type");
-                };
+                        let mut set_data = SetData {
+                            key: key.to_string(),
+                            value: value.to_string(),
+                            arguments: SetArguments { ttl: None },
+                        };
 
-                let command_type = command_type.to_lowercase();
-                match command_type.as_str() {
-                    "replication" => Ok(Command::Info(InfoCommand::Replication)),
-                    _ => bail!("unsupported command"),
+                        // TODO: there are other args!
+                        if let Ok(RespMessage::Bulk(ttl_format)) =
+                            messages.get(3).context("ttl get")
+                        {
+                            let RespMessage::Bulk(ttl) =
+                                messages.get(4).context("ttl value get")?
+                            else {
+                                bail!("non integer string for px");
+                            };
+
+                            let ttl = ttl.parse::<u64>().context("converting ttl to number")?;
+
+                            let ttl_format = ttl_format.to_lowercase();
+                            match ttl_format.as_ref() {
+                                "ex" => {
+                                    set_data.arguments.ttl = Some(Duration::from_secs(ttl));
+                                }
+                                "px" => {
+                                    set_data.arguments.ttl = Some(Duration::from_millis(ttl));
+                                }
+                                _ => bail!("unknown args"),
+                            }
+                        };
+
+                        Ok(Message::Set(set_data))
+                    }
+                    "get" => {
+                        let RespMessage::Bulk(key) = messages.get(1).context("get key")? else {
+                            bail!("non bulk string for key");
+                        };
+
+                        Ok(Message::Get(key.to_string()))
+                    }
+                    "info" => {
+                        let RespMessage::Bulk(command_type) =
+                            messages.get(1).context("get type")?
+                        else {
+                            bail!("non bulk string for type");
+                        };
+
+                        let command_type = command_type.to_lowercase();
+                        match command_type.as_str() {
+                            "replication" => Ok(Message::Info(InfoCommand::Replication)),
+                            _ => bail!("unsupported command"),
+                        }
+                    }
+                    s => bail!("unknown command {:?}", s),
                 }
             }
-            s => bail!("unknown command {:?}", s),
         }
     }
 }
