@@ -149,11 +149,12 @@ impl RedisMessage {
                     offset,
                 })
             }
-            s => bail!("unknown message {}", s),
+            s => bail!("unknown string command {}", s),
         }
     }
 
     // TODO: swap_remove instead of clone?
+    // break into subfunctions
     #[instrument]
     fn parse_array_message(messages: Vec<RESP>) -> anyhow::Result<RedisMessage> {
         let array_command = RedisArrayCommand::from(messages)?;
@@ -199,6 +200,30 @@ impl RedisMessage {
 
                 Ok(RedisMessage::Get(key.clone()))
             }
+            "replconf" => {
+                let subcommand = array_command
+                    .args
+                    .first()
+                    .context("replconf subcommand arg")?;
+
+                match subcommand.to_lowercase().as_str() {
+                    "listening-port" => {
+                        let port = array_command.args.get(1).context("replconf port")?;
+                        let port: u16 = port.parse().context("parse port")?;
+                        Ok(RedisMessage::ReplConfPort { port })
+                    }
+                    "capa" => {
+                        let capa = array_command
+                            .args
+                            .get(1)
+                            .context("replconf capa")?
+                            .to_string();
+
+                        Ok(RedisMessage::ReplConfCapa { capa })
+                    }
+                    s => bail!("unknown replconf {:?}", s),
+                }
+            }
             "info" => {
                 let subcommand = array_command.args.first().context("info subcommand")?;
 
@@ -208,7 +233,7 @@ impl RedisMessage {
                     _ => bail!("unsupported command"),
                 }
             }
-            s => bail!("unknown command {:?}", s),
+            s => bail!("unknown array command {:?}", s),
         }
     }
 }

@@ -73,7 +73,7 @@ impl ConnectionActor {
                 RedisMessage::Info(info_data) => match info_data {
                     InfoCommand::Replication => self.server_mode.to_resp(),
                 },
-                _ => bail!("unexpected"),
+                s => bail!("unexpected command {:?}", s),
             };
 
             self.send_response(response_message)
