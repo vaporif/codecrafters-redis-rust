@@ -2,7 +2,7 @@ use crate::{
     prelude::*,
     server::{codec::RespCodec, commands::RedisMessage},
 };
-use async_channel::{bounded, unbounded, Receiver, Sender};
+use async_channel::{bounded, unbounded, Receiver};
 use futures::{SinkExt, StreamExt};
 use rand::{distributions::Alphanumeric, Rng};
 use std::net::SocketAddr;
@@ -74,7 +74,7 @@ impl Server {
             bounded::<ConnectionActor>(self.max_connections);
         let (store_access_tx, store_access_rx) = unbounded::<StoreCommand>();
 
-        Self::run_connections_processor(connection_processor_rx, store_access_tx);
+        Self::run_connections_processor(connection_processor_rx);
 
         let storage_actor = StorageActor::new(store_access_rx);
         storage_actor.run_actor();
@@ -82,8 +82,13 @@ impl Server {
         loop {
             match listener.accept().await {
                 Ok((tcp_stream, socket)) => {
-                    let connection =
-                        ConnectionActor::new(socket, tcp_stream, self.server_mode.clone());
+                    let store_access_tx = store_access_tx.clone();
+                    let connection = ConnectionActor::new(
+                        socket,
+                        tcp_stream,
+                        self.server_mode.clone(),
+                        store_access_tx,
+                    );
 
                     if let Err(e) = connection_processor_tx.send(connection).await {
                         bail!("processing channel error {e}");
@@ -168,19 +173,15 @@ impl Server {
     }
 
     #[instrument(skip_all)]
-    fn run_connections_processor(
-        connection_processor_rx: Receiver<ConnectionActor>,
-        store_access_tx: Sender<StoreCommand>,
-    ) {
+    fn run_connections_processor(connection_processor_rx: Receiver<ConnectionActor>) {
         tokio::spawn(async move {
             trace!("connections processor started");
             loop {
                 while let Ok(mut connection) = connection_processor_rx.recv().await {
                     trace!("accepted new connection {:?}", &connection);
-                    let store_access_tx = store_access_tx.clone();
                     tokio::spawn(async move {
                         trace!("processing connection {:?}", &connection);
-                        if let Err(e) = connection.run_actor(store_access_tx).await {
+                        if let Err(e) = connection.run_actor().await {
                             error!("Failed to process connection, error {:?}", e)
                         }
                     });
