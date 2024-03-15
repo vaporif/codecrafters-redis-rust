@@ -1,6 +1,6 @@
 use crate::{
     prelude::*,
-    server::{codec::RespCodec, commands::Message},
+    server::{codec::RespCodec, commands::RedisMessage},
 };
 use async_channel::{bounded, unbounded, Receiver, Sender};
 use futures::{SinkExt, StreamExt};
@@ -16,7 +16,7 @@ use super::{
 pub enum ServerMode {
     Master {
         master_replid: String,
-        master_repl_offset: u64,
+        master_repl_offset: i32,
     },
     Slave(MasterAddr),
 }
@@ -108,9 +108,11 @@ impl Server {
             .context("failed to connect to master")?;
         let mut master_connection = Framed::new(master_connection, RespCodec);
 
-        master_connection.send(Message::Ping(None).into()).await?;
+        master_connection
+            .send(RedisMessage::Ping(None).into())
+            .await?;
 
-        let Message::Pong = master_connection
+        let RedisMessage::Pong = master_connection
             .next()
             .await
             .context("expecting pong response")??
@@ -120,14 +122,14 @@ impl Server {
 
         master_connection
             .send(
-                Message::ReplConfPort {
+                RedisMessage::ReplConfPort {
                     port: self.socket.port(),
                 }
                 .into(),
             )
             .await?;
 
-        let Message::Ok = master_connection
+        let RedisMessage::Ok = master_connection
             .next()
             .await
             .context("expecting repl response")??
@@ -137,14 +139,14 @@ impl Server {
 
         master_connection
             .send(
-                Message::ReplConfCapa {
+                RedisMessage::ReplConfCapa {
                     capa: "psync2".to_string(),
                 }
                 .into(),
             )
             .await?;
 
-        let Message::Ok = master_connection
+        let RedisMessage::Ok = master_connection
             .next()
             .await
             .context("expecting repl response")??
@@ -154,7 +156,7 @@ impl Server {
 
         master_connection
             .send(
-                Message::Psync {
+                RedisMessage::Psync {
                     replication_id: "?".to_string(),
                     offset: -1,
                 }
@@ -162,7 +164,7 @@ impl Server {
             )
             .await?;
 
-        let Message::FullResync {
+        let RedisMessage::FullResync {
             replication_id: _,
             offset: _,
         } = master_connection

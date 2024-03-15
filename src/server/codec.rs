@@ -1,5 +1,6 @@
 use bytes::Buf;
-use resp::{Decoder as RespDecoder, Value as RespMessage};
+use itertools::{Either, Itertools};
+use serde_resp::{array, bulk, de, ser, simple, RESP};
 use std::{
     io::{BufReader, Cursor},
     time::Duration,
@@ -13,7 +14,7 @@ use crate::prelude::*;
 pub struct RespCodec;
 
 impl Decoder for RespCodec {
-    type Item = Message;
+    type Item = RedisMessage;
 
     type Error = anyhow::Error;
 
@@ -30,161 +31,221 @@ impl Decoder for RespCodec {
         let cursor = Cursor::new(src.clone().freeze());
 
         trace!("bytes buffer {:?}", cursor);
-        let buff_reader = BufReader::new(cursor);
-        let mut decoder = RespDecoder::new(buff_reader);
-        let message = decoder.decode().context("decode resp message")?;
+        let mut buff_reader = BufReader::new(cursor);
+        let message: serde_resp::RESP =
+            de::from_buf_reader(&mut buff_reader).context("decoding resp")?;
+
+        let final_position = buff_reader.into_inner().position();
 
         // NOTE: I expect all packets at once
-        src.advance(message.encode().len());
-        let command = Message::try_from(message)?;
+        src.advance(final_position as usize);
+        let command = RedisMessage::try_from(message)?;
         Ok(Some(command))
     }
 }
 
-impl Encoder<RespMessage> for RespCodec {
+impl Encoder<RESP> for RespCodec {
     type Error = anyhow::Error;
 
     #[instrument]
     fn encode(
         &mut self,
-        item: RespMessage,
+        item: RESP,
         dst: &mut bytes::BytesMut,
     ) -> std::prelude::v1::Result<(), Self::Error> {
-        dst.extend_from_slice(&item.encode());
+        dst.extend_from_slice(
+            &ser::to_string(&item)
+                .context("serializing resp")?
+                .into_bytes(),
+        );
         Ok(())
     }
 }
 
-// TODO: very messy parsing, needs refactoring
-impl TryFrom<RespMessage> for Message {
+impl TryFrom<RESP> for RedisMessage {
     type Error = anyhow::Error;
 
-    fn try_from(message: RespMessage) -> std::prelude::v1::Result<Self, Self::Error> {
+    fn try_from(message: RESP) -> std::prelude::v1::Result<Self, Self::Error> {
         match message {
-            RespMessage::Null => todo!(),
-            RespMessage::NullArray => todo!(),
-            RespMessage::String(message) => match message.to_lowercase().as_str() {
-                "ping" => Ok(Message::Ping(None)),
-                "pong" => Ok(Message::Pong),
-                "ok" => Ok(Message::Ok),
-                s if s.starts_with("fullresync") => {
-                    let mut split_message = s.split_whitespace().skip(1);
-                    let replication_id = split_message
-                        .next()
-                        .context("replication_id missed")?
-                        .to_string();
-                    let offset = split_message
-                        .next()
-                        .context("offset missed")?
-                        .parse::<i32>()
-                        .context("wrong data")?;
-                    Ok(Message::FullResync {
-                        replication_id,
-                        offset,
-                    })
-                }
-                s => bail!("unknown message {}", s),
-            },
-            RespMessage::Error(_) => todo!(),
-            RespMessage::Integer(_) => todo!(),
-            RespMessage::Bulk(message) => match message.to_lowercase().as_str() {
-                "ping" => Ok(Message::Ping(None)),
-                "pong" => Ok(Message::Pong),
-                "ok" => Ok(Message::Ok),
-                s => bail!("unknown message {}", s),
-            },
-            RespMessage::BufBulk(_) => todo!(),
-            RespMessage::Array(messages) => {
-                trace!("messages parsed {:?}", messages);
-                if messages.is_empty() {
-                    bail!("empty messages");
-                }
-
-                let RespMessage::Bulk(string) = messages.first().context("first resp string")?
-                else {
-                    bail!("non bulk string for command");
+            serde_resp::RESPType::SimpleString(string) => {
+                RedisMessage::parse_string_message(&string)
+            }
+            serde_resp::RESPType::Error(error) => bail!(error),
+            serde_resp::RESPType::Integer(number) => bail!("unexpected number {number}"),
+            serde_resp::RESPType::BulkString(bytes) => {
+                let bytes = bytes.context("empty bytes")?;
+                let string = resp_bulkstring_to_string(bytes)?;
+                RedisMessage::parse_string_message(&string)
+            }
+            serde_resp::RESPType::Array(data) => {
+                let Some(data) = data else {
+                    bail!("no data returned");
                 };
 
-                let string = string.to_lowercase();
-                match string.as_ref() {
-                    "ping" => Ok(Message::Ping(None)),
-                    "pong" => Ok(Message::Pong),
-                    "echo" => {
-                        let RespMessage::Bulk(argument) =
-                            messages.get(1).context("first argument")?
-                        else {
-                            bail!("non bulk string for argument");
-                        };
+                RedisMessage::parse_array_message(data)
+            }
+        }
+    }
+}
 
-                        Ok(Message::Echo(argument.to_string()))
-                    }
-                    "set" => {
-                        let RespMessage::Bulk(key) = messages.get(1).context("first argument")?
-                        else {
-                            bail!("non bulk string for key");
-                        };
+fn resp_bulkstring_to_string(bytes: Vec<u8>) -> anyhow::Result<String> {
+    String::from_utf8(bytes).context("building utf8 string from resp bulkstring")
+}
 
-                        let RespMessage::Bulk(value) =
-                            messages.get(2).context("second argument")?
-                        else {
-                            bail!("non bulk string for value");
-                        };
+struct RedisArrayCommand {
+    command: String,
+    args: Vec<String>,
+}
 
-                        let mut set_data = SetData {
-                            key: key.to_string(),
-                            value: value.to_string(),
-                            arguments: SetArguments { ttl: None },
-                        };
+impl RedisArrayCommand {
+    fn from(resp: Vec<RESP>) -> anyhow::Result<Self> {
+        let mut resp = resp.into_iter().map(RedisArrayCommand::map_string);
 
-                        // TODO: there are other args!
-                        if let Ok(RespMessage::Bulk(ttl_format)) =
-                            messages.get(3).context("ttl get")
-                        {
-                            let RespMessage::Bulk(ttl) =
-                                messages.get(4).context("ttl value get")?
-                            else {
-                                bail!("non integer string for px");
-                            };
+        let command = resp.next().context("getting command")??;
+        let (args, errs): (Vec<String>, Vec<anyhow::Error>) =
+            resp.partition_map(|result| match result {
+                Ok(ok) => Either::Left(ok),
+                Err(err) => Either::Right(err),
+            });
 
-                            let ttl = ttl.parse::<u64>().context("converting ttl to number")?;
+        // TODO: Helper
+        let error: Vec<_> = errs.into_iter().map(|f| f.to_string()).collect();
+        if !error.is_empty() {
+            bail!(error.join("\n"));
+        }
 
-                            let ttl_format = ttl_format.to_lowercase();
-                            match ttl_format.as_ref() {
-                                "ex" => {
-                                    set_data.arguments.ttl = Some(Duration::from_secs(ttl));
-                                }
-                                "px" => {
-                                    set_data.arguments.ttl = Some(Duration::from_millis(ttl));
-                                }
-                                _ => bail!("unknown args"),
-                            }
-                        };
+        Ok(RedisArrayCommand { command, args })
+    }
 
-                        Ok(Message::Set(set_data))
-                    }
-                    "get" => {
-                        let RespMessage::Bulk(key) = messages.get(1).context("get key")? else {
-                            bail!("non bulk string for key");
-                        };
+    fn map_string(resp: RESP) -> anyhow::Result<String> {
+        let RESP::BulkString(Some(bytes)) = resp else {
+            bail!("non bulk string for command");
+        };
 
-                        Ok(Message::Get(key.to_string()))
-                    }
-                    "info" => {
-                        let RespMessage::Bulk(command_type) =
-                            messages.get(1).context("get type")?
-                        else {
-                            bail!("non bulk string for type");
-                        };
+        resp_bulkstring_to_string(bytes)
+    }
+}
 
-                        let command_type = command_type.to_lowercase();
-                        match command_type.as_str() {
-                            "replication" => Ok(Message::Info(InfoCommand::Replication)),
-                            _ => bail!("unsupported command"),
+impl RedisMessage {
+    #[instrument]
+    fn parse_string_message(message: &str) -> anyhow::Result<RedisMessage> {
+        match message.to_lowercase().as_str() {
+            "ping" => Ok(RedisMessage::Ping(None)),
+            "pong" => Ok(RedisMessage::Pong),
+            "ok" => Ok(RedisMessage::Ok),
+            s if s.starts_with("fullresync") => {
+                let mut split_message = s.split_whitespace().skip(1);
+                let replication_id = split_message
+                    .next()
+                    .context("replication_id missed")?
+                    .to_string();
+                let offset = split_message
+                    .next()
+                    .context("offset missed")?
+                    .parse::<i32>()
+                    .context("wrong data")?;
+                Ok(RedisMessage::FullResync {
+                    replication_id,
+                    offset,
+                })
+            }
+            s => bail!("unknown message {}", s),
+        }
+    }
+
+    // TODO: swap_remove instead of clone?
+    #[instrument]
+    fn parse_array_message(messages: Vec<RESP>) -> anyhow::Result<RedisMessage> {
+        let array_command = RedisArrayCommand::from(messages)?;
+
+        let command = array_command.command.to_lowercase();
+        match command.as_str() {
+            "ping" => Ok(RedisMessage::Ping(None)),
+            "echo" => {
+                let arg = array_command.args.first().context("echo command arg")?;
+
+                Ok(RedisMessage::Echo(arg.clone()))
+            }
+            "set" => {
+                let key = array_command.args.first().context("set key arg")?;
+                let value = array_command.args.get(1).context("set value arg")?;
+
+                let mut set_data = SetData {
+                    key: key.clone(),
+                    value: value.clone(),
+                    arguments: SetArguments { ttl: None },
+                };
+
+                // TODO: there are other args!
+                if let Some(ttl_format) = array_command.args.get(2) {
+                    let ttl = array_command.args.get(3).context("set ttl")?;
+                    let ttl = ttl.parse::<u64>().context("converting ttl to number")?;
+
+                    match ttl_format.to_lowercase().as_ref() {
+                        "ex" => {
+                            set_data.arguments.ttl = Some(Duration::from_secs(ttl));
                         }
+                        "px" => {
+                            set_data.arguments.ttl = Some(Duration::from_millis(ttl));
+                        }
+                        _ => bail!("unknown args"),
                     }
-                    s => bail!("unknown command {:?}", s),
+                }
+
+                Ok(RedisMessage::Set(set_data))
+            }
+            "get" => {
+                let key = array_command.args.first().context("get key arg")?;
+
+                Ok(RedisMessage::Get(key.clone()))
+            }
+            "info" => {
+                let subcommand = array_command.args.first().context("info subcommand")?;
+
+                let subcommand = subcommand.to_lowercase();
+                match subcommand.as_str() {
+                    "replication" => Ok(RedisMessage::Info(InfoCommand::Replication)),
+                    _ => bail!("unsupported command"),
                 }
             }
+            s => bail!("unknown command {:?}", s),
+        }
+    }
+}
+
+impl From<RedisMessage> for RESP {
+    fn from(val: RedisMessage) -> Self {
+        match val {
+            RedisMessage::Ping(_) => array![bulk!(b"PING".to_vec())],
+            RedisMessage::Pong => simple!("PONG".to_string()),
+            RedisMessage::Echo(_) => todo!(),
+            RedisMessage::Set(_) => todo!(),
+            RedisMessage::Get(_) => todo!(),
+            RedisMessage::ReplConfPort { port } => array![
+                bulk!(b"REPLCONF".to_vec()),
+                bulk!(b"LISTENING-PORT".to_vec()),
+                bulk!(port.to_string().into_bytes()),
+            ],
+            RedisMessage::ReplConfCapa { capa } => array![
+                bulk!(b"REPLCONF".to_vec()),
+                bulk!(b"CAPA".to_vec()),
+                bulk!(capa.to_string().into_bytes()),
+            ],
+            RedisMessage::Info(_) => todo!(),
+            RedisMessage::Ok => bulk!(b"OK".to_vec()),
+            RedisMessage::Psync {
+                replication_id,
+                offset,
+            } => array![
+                bulk!(b"PSYNC".to_vec()),
+                bulk!(replication_id.into_bytes()),
+                bulk!(offset.to_string().into_bytes()),
+            ],
+            RedisMessage::FullResync {
+                replication_id,
+                offset,
+            } => simple!(format!("fullresync {replication_id} {offset}")),
+            // Message::Error(_) => todo!(),
         }
     }
 }

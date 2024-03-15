@@ -1,6 +1,6 @@
 use async_channel::Sender;
 use futures::{sink::SinkExt, StreamExt};
-use resp::Value as RespMessage;
+use serde_resp::{bulk, bulk_null, err_str, RESP};
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
@@ -39,9 +39,9 @@ impl ConnectionActor {
                 .context("next command from client")?;
 
             let response_message = match command {
-                Message::Ping(_) => RespMessage::Bulk("pong".to_uppercase().to_string()),
-                Message::Echo(echo_string) => RespMessage::Bulk(echo_string),
-                Message::Set(set_data) => {
+                RedisMessage::Ping(_) => RedisMessage::Pong.into(),
+                RedisMessage::Echo(echo_string) => bulk!(echo_string.into_bytes()),
+                RedisMessage::Set(set_data) => {
                     let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
                     store_access_tx
                         .send(StoreCommand::Set(set_data, reply_channel_tx))
@@ -49,11 +49,13 @@ impl ConnectionActor {
                         .context("sending set store command")?;
 
                     match reply_channel_rx.await.context("waiting for reply for set") {
-                        Ok(_) => RespMessage::Bulk("ok".to_uppercase().to_string()),
-                        Err(e) => RespMessage::Error(format!("error {:?}", e)),
+                        Ok(_) => RedisMessage::Ok.into(),
+                        Err(e) => err_str!(format!("error {:?}", e)),
                     }
                 }
-                Message::Get(key) => {
+                RedisMessage::ReplConfCapa { .. } => RedisMessage::Ok.into(),
+                RedisMessage::ReplConfPort { .. } => RedisMessage::Ok.into(),
+                RedisMessage::Get(key) => {
                     let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
                     store_access_tx
                         .send(StoreCommand::Get(key, reply_channel_tx))
@@ -62,14 +64,13 @@ impl ConnectionActor {
 
                     match reply_channel_rx.await.context("waiting for reply for get") {
                         Ok(result) => match result {
-                            Some(value) => RespMessage::Bulk(value),
-                            None => RespMessage::Null,
+                            Some(value) => bulk!(value.into_bytes()),
+                            None => bulk_null!(),
                         },
-                        Err(e) => RespMessage::Error(format!("error {:?}", e)),
+                        Err(e) => err_str!(format!("error {:?}", e)),
                     }
                 }
-                // TODO: would need serde :(
-                Message::Info(info_data) => match info_data {
+                RedisMessage::Info(info_data) => match info_data {
                     InfoCommand::Replication => self.server_mode.to_resp(),
                 },
                 _ => bail!("unexpected"),
@@ -83,7 +84,7 @@ impl ConnectionActor {
 
     // TODO: cover connection shutdown
     #[tracing::instrument(skip(self))]
-    async fn next_command(&mut self) -> anyhow::Result<Message> {
+    async fn next_command(&mut self) -> anyhow::Result<RedisMessage> {
         self.tcp_stream
             .next()
             .await
@@ -92,7 +93,7 @@ impl ConnectionActor {
     }
 
     #[tracing::instrument(skip(self))]
-    async fn send_response(&mut self, message: RespMessage) -> anyhow::Result<()> {
+    async fn send_response(&mut self, message: RESP) -> anyhow::Result<()> {
         self.tcp_stream
             .send(message)
             .await
@@ -101,7 +102,7 @@ impl ConnectionActor {
 }
 
 impl ServerMode {
-    fn to_resp(&self) -> RespMessage {
+    fn to_resp(&self) -> RESP {
         match self {
             ServerMode::Master {
                 master_replid,
@@ -111,9 +112,9 @@ impl ServerMode {
                 let master_replid = format!("master_replid:{master_replid}");
                 let master_repl_offset = format!("master_repl_offset:{master_repl_offset}");
                 let string = [role, master_replid, master_repl_offset].join("\n");
-                RespMessage::Bulk(string)
+                bulk!(string.into_bytes())
             }
-            ServerMode::Slave(_) => RespMessage::Bulk("role:slave".to_string()),
+            ServerMode::Slave(_) => bulk!(b"role:slave".to_vec()),
         }
     }
 }
