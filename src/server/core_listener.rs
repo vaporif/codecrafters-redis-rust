@@ -108,9 +108,7 @@ impl Server {
             .context("failed to connect to master")?;
         let mut master_connection = Framed::new(master_connection, RespCodec);
 
-        master_connection
-            .send(RedisMessage::Ping(None).into())
-            .await?;
+        master_connection.send(RedisMessage::Ping(None)).await?;
 
         let RedisMessage::Pong = master_connection
             .next()
@@ -121,12 +119,9 @@ impl Server {
         };
 
         master_connection
-            .send(
-                RedisMessage::ReplConfPort {
-                    port: self.socket.port(),
-                }
-                .into(),
-            )
+            .send(RedisMessage::ReplConfPort {
+                port: self.socket.port(),
+            })
             .await?;
 
         let RedisMessage::Ok = master_connection
@@ -138,12 +133,9 @@ impl Server {
         };
 
         master_connection
-            .send(
-                RedisMessage::ReplConfCapa {
-                    capa: "psync2".to_string(),
-                }
-                .into(),
-            )
+            .send(RedisMessage::ReplConfCapa {
+                capa: "psync2".to_string(),
+            })
             .await?;
 
         let RedisMessage::Ok = master_connection
@@ -155,13 +147,10 @@ impl Server {
         };
 
         master_connection
-            .send(
-                RedisMessage::Psync {
-                    replication_id: "?".to_string(),
-                    offset: -1,
-                }
-                .into(),
-            )
+            .send(RedisMessage::Psync {
+                replication_id: "?".to_string(),
+                offset: -1,
+            })
             .await?;
 
         let RedisMessage::FullResync {

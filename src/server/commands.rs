@@ -2,6 +2,8 @@ use crate::prelude::*;
 use std::time::Duration;
 use tokio::sync::oneshot;
 
+use super::core_listener::ServerMode;
+
 pub type GetReplyChannel = oneshot::Sender<Option<String>>;
 pub type SetReplyChannel = oneshot::Sender<Result<()>>;
 
@@ -30,7 +32,8 @@ pub enum RedisMessage {
     Pong,
     Ok,
     Echo(String),
-    // Error(String),
+    EchoResponse(String),
+    Err(String),
     Set(SetData),
     Get(String),
     Psync { replication_id: String, offset: i32 },
@@ -38,6 +41,9 @@ pub enum RedisMessage {
     ReplConfPort { port: u16 },
     ReplConfCapa { capa: String },
     Info(InfoCommand),
+    CacheFound(Vec<u8>),
+    CacheNotFound,
+    InfoResponse(ServerMode),
 }
 
 #[derive(Debug)]

@@ -1,6 +1,5 @@
 use async_channel::Sender;
 use futures::{sink::SinkExt, StreamExt};
-use serde_resp::{bulk, bulk_null, err_str, RESP};
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
@@ -39,8 +38,8 @@ impl ConnectionActor {
                 .context("next command from client")?;
 
             let response_message = match command {
-                RedisMessage::Ping(_) => RedisMessage::Pong.into(),
-                RedisMessage::Echo(echo_string) => bulk!(echo_string.into_bytes()),
+                RedisMessage::Ping(_) => RedisMessage::Pong,
+                RedisMessage::Echo(echo_string) => RedisMessage::EchoResponse(echo_string),
                 RedisMessage::Set(set_data) => {
                     let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
                     store_access_tx
@@ -49,12 +48,12 @@ impl ConnectionActor {
                         .context("sending set store command")?;
 
                     match reply_channel_rx.await.context("waiting for reply for set") {
-                        Ok(_) => RedisMessage::Ok.into(),
-                        Err(e) => err_str!(format!("error {:?}", e)),
+                        Ok(_) => RedisMessage::Ok,
+                        Err(e) => RedisMessage::Err(format!("error {:?}", e)),
                     }
                 }
-                RedisMessage::ReplConfCapa { .. } => RedisMessage::Ok.into(),
-                RedisMessage::ReplConfPort { .. } => RedisMessage::Ok.into(),
+                RedisMessage::ReplConfCapa { .. } => RedisMessage::Ok,
+                RedisMessage::ReplConfPort { .. } => RedisMessage::Ok,
                 RedisMessage::Psync {
                     replication_id,
                     offset,
@@ -71,7 +70,6 @@ impl ConnectionActor {
                             replication_id: master_replid.clone(),
                             offset: 0,
                         }
-                        .into()
                     }
                     _ => todo!(),
                 },
@@ -84,14 +82,16 @@ impl ConnectionActor {
 
                     match reply_channel_rx.await.context("waiting for reply for get") {
                         Ok(result) => match result {
-                            Some(value) => bulk!(value.into_bytes()),
-                            None => bulk_null!(),
+                            Some(value) => RedisMessage::CacheFound(value.into_bytes()),
+                            None => RedisMessage::CacheNotFound,
                         },
-                        Err(e) => err_str!(format!("error {:?}", e)),
+                        Err(e) => RedisMessage::Err(format!("error {:?}", e)),
                     }
                 }
                 RedisMessage::Info(info_data) => match info_data {
-                    InfoCommand::Replication => self.server_mode.to_resp(),
+                    InfoCommand::Replication => {
+                        RedisMessage::InfoResponse(self.server_mode.clone())
+                    }
                 },
                 s => bail!("unexpected command {:?}", s),
             };
@@ -113,28 +113,10 @@ impl ConnectionActor {
     }
 
     #[tracing::instrument(skip(self))]
-    async fn send_response(&mut self, message: RESP) -> anyhow::Result<()> {
+    async fn send_response(&mut self, message: RedisMessage) -> anyhow::Result<()> {
         self.tcp_stream
             .send(message)
             .await
             .context("sending message")
-    }
-}
-
-impl ServerMode {
-    fn to_resp(&self) -> RESP {
-        match self {
-            ServerMode::Master {
-                master_replid,
-                master_repl_offset,
-            } => {
-                let role = "role:master".to_string();
-                let master_replid = format!("master_replid:{master_replid}");
-                let master_repl_offset = format!("master_repl_offset:{master_repl_offset}");
-                let string = [role, master_replid, master_repl_offset].join("\n");
-                bulk!(string.into_bytes())
-            }
-            ServerMode::Slave(_) => bulk!(b"role:slave".to_vec()),
-        }
     }
 }

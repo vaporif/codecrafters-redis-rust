@@ -1,13 +1,13 @@
 use bytes::Buf;
 use itertools::{Either, Itertools};
-use serde_resp::{array, bulk, de, ser, simple, RESP};
+use serde_resp::{array, bulk, bulk_null, de, err_str, ser, simple, RESP};
 use std::{
     io::{BufReader, Cursor},
     time::Duration,
 };
 use tokio_util::codec::{Decoder, Encoder};
 
-use super::commands::*;
+use super::{commands::*, core_listener::ServerMode};
 use crate::prelude::*;
 
 #[derive(Debug)]
@@ -44,15 +44,16 @@ impl Decoder for RespCodec {
     }
 }
 
-impl Encoder<RESP> for RespCodec {
+impl Encoder<RedisMessage> for RespCodec {
     type Error = anyhow::Error;
 
     #[instrument]
     fn encode(
         &mut self,
-        item: RESP,
+        item: RedisMessage,
         dst: &mut bytes::BytesMut,
     ) -> std::prelude::v1::Result<(), Self::Error> {
+        let item: RESP = item.into();
         dst.extend_from_slice(
             &ser::to_string(&item)
                 .context("serializing resp")?
@@ -283,7 +284,29 @@ impl From<RedisMessage> for RESP {
                 replication_id,
                 offset,
             } => simple!(format!("fullresync {replication_id} {offset}")),
-            // Message::Error(_) => todo!(),
+            RedisMessage::EchoResponse(echo) => bulk!(echo.into_bytes()),
+            RedisMessage::Err(error) => err_str!(error),
+            RedisMessage::CacheFound(val) => bulk!(val),
+            RedisMessage::CacheNotFound => bulk_null!(),
+            RedisMessage::InfoResponse(server_mode) => server_mode.to_resp(),
+        }
+    }
+}
+
+impl ServerMode {
+    fn to_resp(&self) -> RESP {
+        match self {
+            ServerMode::Master {
+                master_replid,
+                master_repl_offset,
+            } => {
+                let role = "role:master".to_string();
+                let master_replid = format!("master_replid:{master_replid}");
+                let master_repl_offset = format!("master_repl_offset:{master_repl_offset}");
+                let string = [role, master_replid, master_repl_offset].join("\n");
+                bulk!(string.into_bytes())
+            }
+            ServerMode::Slave(_) => bulk!(b"role:slave".to_vec()),
         }
     }
 }
