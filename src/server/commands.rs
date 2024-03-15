@@ -33,6 +33,8 @@ pub enum Message {
     Echo(String),
     Set(SetData),
     Get(String),
+    Psync { replication_id: String, offset: i32 },
+    FullResync { replication_id: String, offset: i32 },
     ReplConfPort { port: u16 },
     ReplConfCapa { capa: String },
     Info(InfoCommand),
@@ -63,6 +65,18 @@ impl From<Message> for RespMessage {
             ]),
             Message::Info(_) => todo!(),
             Message::Ok => todo!(),
+            Message::Psync {
+                replication_id,
+                offset,
+            } => RespMessage::Array(vec![
+                RespMessage::Bulk("psync".to_string()),
+                RespMessage::Bulk(replication_id),
+                RespMessage::Bulk(offset.to_string()),
+            ]),
+            Message::FullResync {
+                replication_id,
+                offset,
+            } => RespMessage::String(format!("fullresync {replication_id} {offset}")),
         }
     }
 }

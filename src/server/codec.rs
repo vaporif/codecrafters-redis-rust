@@ -55,7 +55,7 @@ impl Encoder<RespMessage> for RespCodec {
     }
 }
 
-// TODO: refactor mapping of commands, maybe use serde?
+// TODO: very messy parsing, needs refactoring
 impl TryFrom<RespMessage> for Message {
     type Error = anyhow::Error;
 
@@ -67,6 +67,22 @@ impl TryFrom<RespMessage> for Message {
                 "ping" => Ok(Message::Ping(None)),
                 "pong" => Ok(Message::Pong),
                 "ok" => Ok(Message::Ok),
+                s if s.starts_with("fullresync") => {
+                    let mut split_message = s.split_whitespace().skip(1);
+                    let replication_id = split_message
+                        .next()
+                        .context("replication_id missed")?
+                        .to_string();
+                    let offset = split_message
+                        .next()
+                        .context("offset missed")?
+                        .parse::<i32>()
+                        .context("wrong data")?;
+                    Ok(Message::FullResync {
+                        replication_id,
+                        offset,
+                    })
+                }
                 s => bail!("unknown message {}", s),
             },
             RespMessage::Error(_) => todo!(),

@@ -152,6 +152,27 @@ impl Server {
             bail!("expecting ok reply")
         };
 
+        master_connection
+            .send(
+                Message::Psync {
+                    replication_id: "?".to_string(),
+                    offset: -1,
+                }
+                .into(),
+            )
+            .await?;
+
+        let Message::FullResync {
+            replication_id: _,
+            offset: _,
+        } = master_connection
+            .next()
+            .await
+            .context("expecting fullserync response")??
+        else {
+            bail!("expecting fullresync reply")
+        };
+
         Ok(())
     }
 
