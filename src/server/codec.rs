@@ -8,7 +8,7 @@ use std::{
 };
 use tokio_util::codec::{Decoder, Encoder};
 
-use super::{commands::*, core_listener::ServerMode};
+use super::{commands::*, main_loop::ServerMode};
 use crate::prelude::*;
 
 #[derive(Debug)]
@@ -300,7 +300,7 @@ impl From<RedisMessage> for RESP {
             RedisMessage::FullResync {
                 replication_id,
                 offset,
-            } => simple!(format!("fullresync {replication_id} {offset}")),
+            } => simple!(format!("FULLRESYNC {replication_id} {offset}")),
             RedisMessage::EchoResponse(echo) => bulk!(echo.into_bytes()),
             RedisMessage::Err(error) => err_str!(error),
             RedisMessage::CacheFound(val) => bulk!(val),

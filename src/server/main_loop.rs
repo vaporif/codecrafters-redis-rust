@@ -1,4 +1,5 @@
 use crate::{
+    cli::MasterAddr,
     prelude::*,
     server::{codec::RespCodec, commands::RedisMessage},
 };

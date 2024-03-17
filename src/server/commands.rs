@@ -2,7 +2,7 @@ use crate::prelude::*;
 use std::time::Duration;
 use tokio::sync::oneshot;
 
-use super::core_listener::ServerMode;
+use super::main_loop::ServerMode;
 
 pub type GetReplyChannel = oneshot::Sender<Option<String>>;
 pub type SetReplyChannel = oneshot::Sender<Result<()>>;

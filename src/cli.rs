@@ -1,7 +1,10 @@
 use std::usize;
 
 use crate::prelude::*;
-use clap::{arg, command, Parser};
+pub use clap::Parser;
+use clap::{arg, command};
+
+pub type MasterAddr = (String, u16);
 
 #[derive(Parser, Debug)]
 #[command(author = "Dmytro Onypko", name = "Redis Sample Server")]

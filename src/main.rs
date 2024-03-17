@@ -4,13 +4,8 @@ use std::{
 };
 
 use clap::Parser;
-use cli::Cli;
+use redis_starter_rust::prelude::*;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-
-mod cli;
-pub mod prelude;
-mod server;
-use crate::prelude::*;
 
 fn init_tracing() {
     if env::var("RUST_LOG").is_err() {
@@ -20,22 +15,22 @@ fn init_tracing() {
         .with(tracing_subscriber::fmt::layer())
         .with(EnvFilter::from_default_env());
 
-    // if cfg!(debug_assertions) {
-    // subscriber.with(console_subscriber::spawn()).init();
-    // trace!("tokio console enabled");
-    // } else {
-    subscriber.init();
-    // };
+    if cfg!(debug_assertions) {
+        subscriber.with(console_subscriber::spawn()).init();
+        trace!("tokio console enabled");
+    } else {
+        subscriber.init();
+    };
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
-    let cli = Cli::parse();
+    let cli = redis_starter_rust::Cli::parse();
     let replicaof = cli.replicaof()?;
 
     let socket = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), cli.port);
-    let server = server::Server::new(socket.into(), cli.max_connections, replicaof);
+    let server = redis_starter_rust::Server::new(socket.into(), cli.max_connections, replicaof);
 
     server.run().await.context("run listener")?;
 
