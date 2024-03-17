@@ -1,4 +1,7 @@
-use super::error::TransportError;
+use super::{
+    error::TransportError,
+    main_loop::{MasterInfo, ServerMode},
+};
 use bytes::Buf;
 use itertools::{Either, Itertools};
 use serde_resp::{array, bulk, bulk_null, de, err_str, ser, simple, RESP};
@@ -8,7 +11,7 @@ use std::{
 };
 use tokio_util::codec::{Decoder, Encoder};
 
-use super::{commands::*, main_loop::ServerMode};
+use super::commands::*;
 use crate::prelude::*;
 
 #[derive(Debug)]
@@ -174,15 +177,15 @@ impl RedisMessage {
     fn parse_array_message(messages: Vec<RESP>) -> Result<RedisMessage, TransportError> {
         let array_command = RedisArrayCommand::from(messages)?;
 
-        let command = array_command.command.to_lowercase();
+        let command = array_command.command.to_uppercase();
         match command.as_str() {
-            "ping" => Ok(RedisMessage::Ping(None)),
-            "echo" => {
+            "PING" => Ok(RedisMessage::Ping(None)),
+            "ECHO" => {
                 let arg = array_command.args.first().context("echo command arg")?;
 
                 Ok(RedisMessage::Echo(arg.clone()))
             }
-            "set" => {
+            "SET" => {
                 let key = array_command.args.first().context("set key arg")?;
                 let value = array_command.args.get(1).context("set value arg")?;
 
@@ -197,11 +200,11 @@ impl RedisMessage {
                     let ttl = array_command.args.get(3).context("set ttl")?;
                     let ttl = ttl.parse::<u64>().context("converting ttl to number")?;
 
-                    match ttl_format.to_lowercase().as_ref() {
-                        "ex" => {
+                    match ttl_format.to_uppercase().as_ref() {
+                        "EX" => {
                             set_data.arguments.ttl = Some(Duration::from_secs(ttl));
                         }
-                        "px" => {
+                        "PX" => {
                             set_data.arguments.ttl = Some(Duration::from_millis(ttl));
                         }
                         s => Err(TransportError::UnknownCommand(format!(
@@ -213,24 +216,24 @@ impl RedisMessage {
 
                 Ok(RedisMessage::Set(set_data))
             }
-            "get" => {
+            "GET" => {
                 let key = array_command.args.first().context("get key arg")?;
 
                 Ok(RedisMessage::Get(key.clone()))
             }
-            "replconf" => {
+            "REPLCONF" => {
                 let subcommand = array_command
                     .args
                     .first()
                     .context("replconf subcommand arg")?;
 
-                match subcommand.to_lowercase().as_str() {
-                    "listening-port" => {
+                match subcommand.to_uppercase().as_str() {
+                    "LISTENING-PORT" => {
                         let port = array_command.args.get(1).context("replconf port")?;
                         let port = port.parse().context("parse port")?;
                         Ok(RedisMessage::ReplConfPort { port })
                     }
-                    "capa" => {
+                    "CAPA" => {
                         let capa = array_command
                             .args
                             .get(1)
@@ -242,7 +245,7 @@ impl RedisMessage {
                     s => Err(anyhow::anyhow!("unknown replconf {:?}", s))?,
                 }
             }
-            "psync" => {
+            "PSYNC" => {
                 let replication_id = array_command
                     .args
                     .first()
@@ -255,12 +258,12 @@ impl RedisMessage {
                     offset,
                 })
             }
-            "info" => {
+            "INFO" => {
                 let subcommand = array_command.args.first().context("info subcommand")?;
 
-                let subcommand = subcommand.to_lowercase();
+                let subcommand = subcommand.to_uppercase();
                 match subcommand.as_str() {
-                    "replication" => Ok(RedisMessage::Info(InfoCommand::Replication)),
+                    "REPLICATION" => Ok(RedisMessage::Info(InfoCommand::Replication)),
                     s => Err(TransportError::UnknownCommand(s.to_string())),
                 }
             }
@@ -316,10 +319,10 @@ impl From<RedisMessage> for RESP {
 impl ServerMode {
     fn to_resp(&self) -> RESP {
         match self {
-            ServerMode::Master {
+            ServerMode::Master(MasterInfo {
                 master_replid,
                 master_repl_offset,
-            } => {
+            }) => {
                 let role = "role:master".to_string();
                 let master_replid = format!("master_replid:{master_replid}");
                 let master_repl_offset = format!("master_repl_offset:{master_repl_offset}");

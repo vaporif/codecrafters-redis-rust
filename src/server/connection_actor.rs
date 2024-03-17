@@ -1,45 +1,45 @@
-use async_channel::Sender;
 use futures::{sink::SinkExt, StreamExt};
-use std::net::SocketAddr;
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
 use tokio::sync::oneshot;
 
-use super::{codec::RespCodec, commands::*, error::TransportError, main_loop::ServerMode};
+use super::{
+    codec::RespCodec,
+    commands::*,
+    error::TransportError,
+    main_loop::{MasterInfo, ServerMode},
+    storage_actor::{self, StorageActorHandle},
+};
 use crate::{prelude::*, server::rdb::Rdb};
 
 #[derive(DebugExtras)]
 #[allow(unused)]
 pub struct ConnectionActor {
-    pub socket: SocketAddr,
-    #[debug_ignore]
     tcp_stream: Framed<TcpStream, RespCodec>,
     #[debug_ignore]
     server_mode: ServerMode,
     #[debug_ignore]
-    store_access_tx: Sender<StoreCommand>,
+    storage_handle: StorageActorHandle,
 }
 
 impl ConnectionActor {
     pub fn new(
-        socket: SocketAddr,
         tcp_stream: TcpStream,
         server_mode: ServerMode,
-        store_access_tx: Sender<StoreCommand>,
+        storage_handle: StorageActorHandle,
     ) -> Self {
         let tcp_stream = Framed::new(tcp_stream, RespCodec);
         Self {
-            socket,
             tcp_stream,
             server_mode,
-            store_access_tx,
+            storage_handle,
         }
     }
 
-    pub async fn run_actor(&mut self) -> anyhow::Result<()> {
+    pub async fn run(&mut self) -> anyhow::Result<()> {
         loop {
-            match self.hanlde_connection().await {
+            match self.handle_connection().await {
                 Ok(_) => trace!("connection request handled"),
                 Err(err) => match err {
                     TransportError::EmptyResponse() => {
@@ -53,7 +53,7 @@ impl ConnectionActor {
         }
     }
 
-    async fn hanlde_connection(&mut self) -> Result<(), TransportError> {
+    async fn handle_connection(&mut self) -> Result<(), TransportError> {
         let command = self.next_command().await?;
 
         let message = match command {
@@ -61,8 +61,8 @@ impl ConnectionActor {
             RedisMessage::Echo(echo_string) => RedisMessage::EchoResponse(echo_string),
             RedisMessage::Set(set_data) => {
                 let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
-                self.store_access_tx
-                    .send(StoreCommand::Set(set_data, reply_channel_tx))
+                self.storage_handle
+                    .send(storage_actor::Message::Set(set_data, reply_channel_tx))
                     .await
                     .context("sending set store command")?;
 
@@ -71,6 +71,7 @@ impl ConnectionActor {
                     Err(e) => RedisMessage::Err(format!("error {:?}", e)),
                 }
             }
+            // TODO: protocol is not stateless, need to rework
             RedisMessage::ReplConfCapa { .. } => RedisMessage::Ok,
             RedisMessage::ReplConfPort { .. } => RedisMessage::Ok,
             RedisMessage::Psync {
@@ -78,9 +79,9 @@ impl ConnectionActor {
                 offset,
             } => match (replication_id.as_str(), offset) {
                 ("?", -1) => {
-                    let ServerMode::Master {
+                    let ServerMode::Master(MasterInfo {
                         ref master_replid, ..
-                    } = self.server_mode
+                    }) = self.server_mode
                     else {
                         return Err(TransportError::Other(anyhow!(
                             "server in slave mode".to_string()
@@ -101,8 +102,8 @@ impl ConnectionActor {
             },
             RedisMessage::Get(key) => {
                 let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
-                self.store_access_tx
-                    .send(StoreCommand::Get(key, reply_channel_tx))
+                self.storage_handle
+                    .send(storage_actor::Message::Get(key, reply_channel_tx))
                     .await
                     .context("sending set store command")?;
 
@@ -143,3 +144,34 @@ impl ConnectionActor {
             .context("sending message")?)
     }
 }
+
+// WIP
+// struct ConnectionActorHandle {
+//     server_mode: ServerMode,
+//     sender: async_channel::Sender<NewConnectionMessage>,
+// }
+
+// impl ConnectionActorHandle {
+//     pub fn new(server_mode: ServerMode, max_connections: usize) -> Self {
+//         let (sender, receiver) = async_channel::bounded(max_connections);
+
+//         let mut actor = ConnectionActor::new(receive);
+//         tokio::spawn(async move {
+//             trace!("storage actor started");
+//             loop {
+//                 actor.run().await;
+//             }
+//         });
+
+//         Self { sender }
+//     }
+// }
+
+// enum Message {
+//     NewConnection(tokio::net::TcpStream),
+// }
+
+// struct NewConnectionMessage {
+//     server_mode: ServerMode,
+//     stream: tokio::net::TcpStream,
+// }

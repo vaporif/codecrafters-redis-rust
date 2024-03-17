@@ -3,23 +3,25 @@ use crate::{
     prelude::*,
     server::{codec::RespCodec, commands::RedisMessage},
 };
-use async_channel::{bounded, unbounded, Receiver};
+use async_channel::{bounded, Receiver};
 use futures::{SinkExt, StreamExt};
 use rand::{distributions::Alphanumeric, Rng};
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::Framed;
 
-use super::{
-    commands::StoreCommand, connection_actor::ConnectionActor, storage_actor::StorageActor,
-};
+use super::{connection_actor::ConnectionActor, storage_actor::StorageActorHandle};
+
 #[derive(Debug, Clone)]
 pub enum ServerMode {
-    Master {
-        master_replid: String,
-        master_repl_offset: i32,
-    },
+    Master(MasterInfo),
     Slave(MasterAddr),
+}
+
+#[derive(Debug, Clone)]
+pub struct MasterInfo {
+    pub master_replid: String,
+    pub master_repl_offset: i32,
 }
 
 impl ServerMode {
@@ -32,10 +34,10 @@ impl ServerMode {
                     .take(40)
                     .map(char::from)
                     .collect();
-                ServerMode::Master {
+                ServerMode::Master(MasterInfo {
                     master_replid: random_string,
                     master_repl_offset: 0,
-                }
+                })
             }
         }
     }
@@ -73,22 +75,20 @@ impl Server {
 
         let (connection_processor_tx, connection_processor_rx) =
             bounded::<ConnectionActor>(self.max_connections);
-        let (store_access_tx, store_access_rx) = unbounded::<StoreCommand>();
 
         Self::run_connections_processor(connection_processor_rx);
 
-        let storage_actor = StorageActor::new(store_access_rx);
-        storage_actor.run_actor();
+        let storage_actor_hnd = StorageActorHandle::new();
 
         loop {
             match listener.accept().await {
                 Ok((tcp_stream, socket)) => {
-                    let store_access_tx = store_access_tx.clone();
+                    trace!("new connection from {:?}", socket);
+                    let storage_actor_hnd = storage_actor_hnd.clone();
                     let connection = ConnectionActor::new(
-                        socket,
                         tcp_stream,
                         self.server_mode.clone(),
-                        store_access_tx,
+                        storage_actor_hnd,
                     );
 
                     if let Err(e) = connection_processor_tx.send(connection).await {
@@ -178,11 +178,11 @@ impl Server {
         tokio::spawn(async move {
             trace!("connections processor started");
             loop {
-                while let Ok(mut connection) = connection_processor_rx.recv().await {
-                    trace!("accepted new connection {:?}", &connection);
+                while let Ok(mut connection_actor) = connection_processor_rx.recv().await {
+                    trace!("accepted new connection {:?}", &connection_actor);
                     tokio::spawn(async move {
-                        trace!("processing connection {:?}", &connection);
-                        if let Err(e) = connection.run_actor().await {
+                        trace!("processing connection {:?}", &connection_actor);
+                        if let Err(e) = connection_actor.run().await {
                             error!("Failed to process connection, error {:?}", e)
                         }
                     });

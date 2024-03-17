@@ -1,5 +1,5 @@
 mod cli;
-pub mod prelude;
+mod prelude;
 mod server;
 
 pub use cli::*;

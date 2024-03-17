@@ -1,17 +1,6 @@
-use crate::prelude::*;
 use std::time::Duration;
-use tokio::sync::oneshot;
 
 use super::main_loop::ServerMode;
-
-pub type GetReplyChannel = oneshot::Sender<Option<String>>;
-pub type SetReplyChannel = oneshot::Sender<Result<()>>;
-
-#[derive(Debug)]
-pub enum StoreCommand {
-    Get(String, GetReplyChannel),
-    Set(SetData, SetReplyChannel),
-}
 
 #[derive(Debug)]
 pub struct SetData {

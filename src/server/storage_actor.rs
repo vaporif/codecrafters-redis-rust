@@ -1,20 +1,28 @@
-use async_channel::Receiver;
+use async_channel::{Receiver, Sender};
 use std::collections::HashMap;
-use tokio::time::Instant;
+use tokio::{sync::oneshot, time::Instant};
 
 use crate::prelude::*;
 
 use super::commands::*;
 
+pub type GetReplyChannel = oneshot::Sender<Option<String>>;
+pub type SetReplyChannel = oneshot::Sender<Result<()>>;
+
+#[derive(Debug)]
+pub enum Message {
+    Get(String, GetReplyChannel),
+    Set(SetData, SetReplyChannel),
+}
 // TODO: Add sharding & active expiration
 pub struct StorageActor {
     data: HashMap<String, String>,
     expire_info: HashMap<String, Instant>,
-    receive_channel: Receiver<StoreCommand>,
+    receive_channel: Receiver<Message>,
 }
 
 impl StorageActor {
-    pub fn new(receive_channel: Receiver<StoreCommand>) -> Self {
+    pub fn new(receive_channel: Receiver<Message>) -> Self {
         Self {
             data: HashMap::new(),
             expire_info: HashMap::new(),
@@ -23,27 +31,22 @@ impl StorageActor {
     }
 
     #[instrument(skip_all)]
-    pub fn run_actor(mut self) {
-        tokio::spawn(async move {
-            loop {
-                trace!("storage actor started");
-                while let Ok(command) = self.receive_channel.recv().await {
-                    trace!("new command received {:?}", &command);
-                    let command_result = match command {
-                        StoreCommand::Get(key, reply_channel_tx) => {
-                            self.process_get_command(key, reply_channel_tx)
-                        }
-                        StoreCommand::Set(set_data, reply_channel_tx) => {
-                            self.process_set_command(set_data, reply_channel_tx)
-                        }
-                    };
-
-                    if let Err(e) = command_result {
-                        error!("error during command {:?}", e);
-                    }
+    pub async fn run(&mut self) {
+        while let Ok(command) = self.receive_channel.recv().await {
+            trace!("new command received {:?}", &command);
+            let command_result = match command {
+                Message::Get(key, reply_channel_tx) => {
+                    self.process_get_command(key, reply_channel_tx)
                 }
+                Message::Set(set_data, reply_channel_tx) => {
+                    self.process_set_command(set_data, reply_channel_tx)
+                }
+            };
+
+            if let Err(e) = command_result {
+                error!("error during command {:?}", e);
             }
-        });
+        }
     }
 
     #[instrument(skip(self, reply_channel_tx))]
@@ -95,5 +98,30 @@ impl StorageActor {
         reply_channel_tx
             .send(Ok(()))
             .map_err(|_| anyhow::Error::msg(format!("could not send result for set {key}")))
+    }
+}
+
+#[derive(Clone)]
+pub struct StorageActorHandle {
+    sender: Sender<Message>,
+}
+
+impl StorageActorHandle {
+    pub fn new() -> Self {
+        let (sender, receive) = async_channel::unbounded();
+
+        let mut actor = StorageActor::new(receive);
+        tokio::spawn(async move {
+            trace!("storage actor started");
+            loop {
+                actor.run().await;
+            }
+        });
+
+        Self { sender }
+    }
+
+    pub async fn send(&self, message: Message) -> Result<()> {
+        self.sender.send(message).await.context("sending message")
     }
 }
