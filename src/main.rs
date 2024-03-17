@@ -15,12 +15,16 @@ fn init_tracing() {
         .with(tracing_subscriber::fmt::layer())
         .with(EnvFilter::from_default_env());
 
-    if cfg!(debug_assertions) {
+    #[cfg(tokio_console)]
+    {
         subscriber.with(console_subscriber::spawn()).init();
-        trace!("tokio console enabled");
-    } else {
+        tracing::trace!("tokio console enabled");
+    }
+
+    #[cfg(not(tokio_console))]
+    {
         subscriber.init();
-    };
+    }
 }
 
 #[tokio::main]
