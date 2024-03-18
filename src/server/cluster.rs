@@ -37,9 +37,13 @@ impl Actor {
             match message {
                 Message::AddNewSlave(socket_addr) => {
                     let slaves = self.slaves.get_or_insert(HashSet::new());
-                    let join_handle = self.slave_handler.start_slave(socket_addr).await;
+                    if let Err(error) = self.slave_handler.start_slave(socket_addr).await {
+                        error!("failed to connect {:?}", error);
+                    }
+
                     // TODO: cover remove & drop & close of handle
-                    _ = slaves.insert(socket_addr)
+                    _ = slaves.insert(socket_addr);
+                    trace!("slave added, slaves in collection {:?}", slaves);
                 }
                 Message::Set(set_data) => {
                     _ = self

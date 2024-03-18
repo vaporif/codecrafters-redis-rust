@@ -157,8 +157,8 @@ impl Executor {
                         },
                         // TODO: Buffer
                         Message::ForwardSetToReplica(set_data) => {
-                            if self.cluster_hnd.send(super::cluster::Message::Set(set_data)).await.is_err() {
-                                tracing::trace!("No replicas")
+                            if let Err(error) =  self.cluster_hnd.send(super::cluster::Message::Set(set_data)).await {
+                                tracing::trace!("No replicas {:?}", error)
                             };
                         },
                     }
