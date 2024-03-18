@@ -104,7 +104,7 @@ impl Executor {
 
         if let ServerMode::Slave(ref master_addr) = server_mode {
             trace!("replicating");
-            let (db_done_tx, db_done_rx) = tokio::sync::oneshot::channel();
+            let (db_done_tx, _) = tokio::sync::oneshot::channel();
 
             executor_messenger
                 .internal_sender
@@ -112,9 +112,10 @@ impl Executor {
                 .await
                 .context("replicate from master")?;
 
-            db_done_rx
-                .await
-                .context("waiting till master replica is completed")?;
+            // TODO: exercise doesn't reply :(
+            // db_done_rx
+            //     .await
+            //     .context("waiting till master replica is completed")?;
         }
 
         Ok(Self {
@@ -129,6 +130,7 @@ impl Executor {
     }
 
     async fn run(mut self) -> anyhow::Result<()> {
+        trace!("waiting on channels");
         loop {
             tokio::select! {
              Some(message) = self.connection_receiver.recv() => {
