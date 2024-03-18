@@ -1,5 +1,5 @@
 use futures::SinkExt;
-use tokio::net::TcpStream;
+use tokio::{net::TcpStream, task::JoinHandle};
 use tokio_util::codec::Framed;
 
 use crate::prelude::*;
@@ -10,7 +10,7 @@ use super::{
 };
 
 #[allow(unused)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Message {
     Set(SetData),
 }
@@ -44,30 +44,30 @@ impl Actor {
 }
 
 pub struct ActorHandle {
-    sender: tokio::sync::broadcast::Sender<Message>,
+    broadcast: tokio::sync::broadcast::Sender<Message>,
 }
 
 #[allow(unused)]
+// TODO: limit replicas
 impl ActorHandle {
-    pub fn new(slave_stream: TcpStream) -> Self {
-        // TODO: limit replicas
-        let (sender, receive) = tokio::sync::broadcast::channel(40);
+    pub fn new(broadcast: tokio::sync::broadcast::Sender<Message>) -> Self {
+        Self { broadcast }
+    }
 
-        let mut actor = Actor::new(slave_stream, receive);
+    pub async fn start_slave(&self, slave_stream: TcpStream) -> JoinHandle<()> {
+        let mut actor = Actor::new(slave_stream, self.broadcast.subscribe());
         tokio::spawn(async move {
             tracing::trace!("slave actor started");
             loop {
                 actor.run().await;
             }
-        });
-
-        Self { sender }
+        })
     }
 
     pub async fn send(
         &self,
         message: Message,
     ) -> Result<usize, tokio::sync::broadcast::error::SendError<Message>> {
-        self.sender.send(message)
+        self.broadcast.send(message)
     }
 }

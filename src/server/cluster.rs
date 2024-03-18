@@ -1,7 +1,9 @@
-use std::{collections::HashMap, net::TcpStream};
+use std::collections::HashMap;
+
+use tokio::net::TcpStream;
+use tokio::task::JoinHandle;
 
 pub use crate::prelude::*;
-use std::net::SocketAddr;
 
 use super::commands::SetData;
 
@@ -13,15 +15,19 @@ pub enum Message {
 }
 
 pub struct Actor {
-    slaves: Option<HashMap<SocketAddr, super::slave::ActorHandle>>,
-    // broadcast: super::
+    slaves: Option<HashMap<usize, JoinHandle<()>>>,
+    slave_handler: super::slave::ActorHandle,
     receiver: tokio::sync::mpsc::UnboundedReceiver<Message>,
 }
 
 #[allow(unused)]
 impl Actor {
-    fn new(receiver: tokio::sync::mpsc::UnboundedReceiver<Message>) -> Self {
+    fn new(
+        slave_handler: super::slave::ActorHandle,
+        receiver: tokio::sync::mpsc::UnboundedReceiver<Message>,
+    ) -> Self {
         Actor {
+            slave_handler,
             receiver,
             slaves: None,
         }
@@ -32,8 +38,17 @@ impl Actor {
             match message {
                 Message::AddNewSlave(slave_stream) => {
                     let slaves = self.slaves.get_or_insert(HashMap::new());
+                    let join_handle = self.slave_handler.start_slave(slave_stream).await;
+                    // TODO: cover remove & drop & close of handle
+                    // slaves.insert(slave_stream, v)
                 }
-                Message::Set(set_data) => {}
+                Message::Set(set_data) => {
+                    _ = self
+                        .slave_handler
+                        .send(super::slave::Message::Set(set_data))
+                        .await
+                        .expect("todo")
+                }
             }
         }
     }
@@ -48,10 +63,11 @@ pub struct ActorHandle {
 #[allow(unused)]
 impl ActorHandle {
     pub fn new() -> Self {
+        let (broadcast, _) = tokio::sync::broadcast::channel(40);
         let (sender, receive) = tokio::sync::mpsc::unbounded_channel();
 
         tokio::spawn(async move {
-            let mut actor = Actor::new(receive);
+            let mut actor = Actor::new(super::slave::ActorHandle::new(broadcast), receive);
             trace!("cluster actor started");
             loop {
                 actor.run().await;
