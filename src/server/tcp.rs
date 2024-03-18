@@ -28,12 +28,15 @@ impl TcpServer {
     async fn accept_connections_loop(&mut self) -> Result<(), std::io::Error> {
         trace!("listener started at {:?}", &self.listener);
         loop {
-            let (stream, socket) = self.listener.accept().await?;
-            tracing::trace!("new connection incoming {:?}", socket);
+            let (stream, socket_addr) = self.listener.accept().await?;
+            tracing::trace!("new connection incoming {:?}", socket_addr);
             let _ = self
                 .executor_messenger
                 .connection_sender
-                .send(super::executor::ConnectionMessage::NewConnection(stream))
+                .send(super::executor::ConnectionMessage::NewConnection((
+                    stream,
+                    socket_addr,
+                )))
                 .await;
         }
     }

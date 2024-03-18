@@ -1,3 +1,5 @@
+use std::net::SocketAddr;
+
 use futures::SinkExt;
 use tokio::{net::TcpStream, task::JoinHandle};
 use tokio_util::codec::Framed;
@@ -21,12 +23,18 @@ struct Actor {
 }
 
 impl Actor {
-    fn new(slave_stream: TcpStream, receive: tokio::sync::broadcast::Receiver<Message>) -> Self {
+    async fn new(
+        slave_addr: SocketAddr,
+        receive: tokio::sync::broadcast::Receiver<Message>,
+    ) -> anyhow::Result<Self> {
+        let slave_stream = TcpStream::connect(slave_addr)
+            .await
+            .context("failed to connect")?;
         let slave_stream = Framed::new(slave_stream, RespCodec);
-        Self {
+        Ok(Self {
             slave_stream,
             receive,
-        }
+        })
     }
 
     async fn run(&mut self) {
@@ -54,8 +62,10 @@ impl ActorHandle {
         Self { broadcast }
     }
 
-    pub async fn start_slave(&self, slave_stream: TcpStream) -> JoinHandle<()> {
-        let mut actor = Actor::new(slave_stream, self.broadcast.subscribe());
+    pub async fn start_slave(&self, slave_addr: SocketAddr) -> JoinHandle<()> {
+        let mut actor = Actor::new(slave_addr, self.broadcast.subscribe())
+            .await
+            .expect("todo");
         tokio::spawn(async move {
             tracing::trace!("slave actor started");
             loop {

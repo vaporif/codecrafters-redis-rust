@@ -1,21 +1,19 @@
-use std::collections::HashMap;
-
-use tokio::net::TcpStream;
-use tokio::task::JoinHandle;
+use std::{collections::HashSet, net::SocketAddr};
 
 pub use crate::prelude::*;
 
 use super::commands::SetData;
 
 pub type MasterAddr = (String, u16);
+#[derive(Debug)]
 #[allow(unused)]
 pub enum Message {
-    AddNewSlave(TcpStream),
+    AddNewSlave(SocketAddr),
     Set(SetData),
 }
 
 pub struct Actor {
-    slaves: Option<HashMap<usize, JoinHandle<()>>>,
+    slaves: Option<HashSet<SocketAddr>>,
     slave_handler: super::slave::ActorHandle,
     receiver: tokio::sync::mpsc::UnboundedReceiver<Message>,
 }
@@ -35,19 +33,20 @@ impl Actor {
 
     async fn run(&mut self) {
         while let Some(message) = self.receiver.recv().await {
+            trace!("new message {:?}", &message);
             match message {
-                Message::AddNewSlave(slave_stream) => {
-                    let slaves = self.slaves.get_or_insert(HashMap::new());
-                    let join_handle = self.slave_handler.start_slave(slave_stream).await;
+                Message::AddNewSlave(socket_addr) => {
+                    let slaves = self.slaves.get_or_insert(HashSet::new());
+                    let join_handle = self.slave_handler.start_slave(socket_addr).await;
                     // TODO: cover remove & drop & close of handle
-                    // slaves.insert(slave_stream, v)
+                    _ = slaves.insert(socket_addr)
                 }
                 Message::Set(set_data) => {
                     _ = self
                         .slave_handler
                         .send(super::slave::Message::Set(set_data))
                         .await
-                        .expect("todo")
+                        .expect("set completed")
                 }
             }
         }

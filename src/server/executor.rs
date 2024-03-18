@@ -1,8 +1,10 @@
+use std::net::SocketAddr;
+
 use crate::{prelude::*, MasterAddr};
 use rand::{distributions::Alphanumeric, Rng};
 use tokio::{net::TcpStream, task::JoinHandle};
 
-use super::{commands::SetData, connection::NewConnection};
+use super::commands::SetData;
 
 #[derive(Debug, Clone)]
 pub enum ServerMode {
@@ -135,43 +137,28 @@ impl Executor {
             tokio::select! {
              Some(message) = self.connection_receiver.recv() => {
                     match message {
-                        ConnectionMessage::NewConnection(stream) => {
+                        ConnectionMessage::NewConnection((stream, socket_addr)) => {
                             let storage_hnd = self.storage_hnd.clone();
+                            let executor_messenger = self.executor_messenger.clone();
                             let server_mode = self.server_mode.clone();
+                            let cluster_hnd = self.cluster_hnd.clone();
 
-                            tokio::spawn(async move {
-                                let new_connection = NewConnection {
-                                    storage_hnd,
-                                    server_mode,
-                                };
-                                let mut actor = super::connection::Actor::new(stream);
-                                if let Err(err) = actor.run(new_connection).await {
-                                    error!("connection failure {:?}", err);
-                                }
-                            });
+                            super::connection::spawn_actor(socket_addr, stream, executor_messenger, storage_hnd, cluster_hnd, server_mode)
+
                         }
                         ConnectionMessage::FatalError(error) => bail!(format!("fatal error {:?}", error)),
                     }
                 }
              Some(message) = self.internal_receiver.recv() => {
                     match message {
-                        Message::AddNewReplica() => todo!(),
                         Message::ReplicateMaster((ref master_addr, sender)) => {
                             let master_addr = master_addr.clone();
-                            tokio::spawn(async move {
-                                let master_stream = tokio::net::TcpStream::connect(master_addr)
-                                    .await
-                                    .expect("failed to connect to master");
-                                let actor = super::replication::Actor::new(master_stream).await;
-                                let master_stream = actor.replicate_from_scratch(self.port).await.expect("todo");
-                                sender.send(master_stream).expect("sent");
-                            });
-
+                            super::replication::spawn_actor(master_addr, self.port, sender);
                         },
                         // TODO: Buffer
                         Message::ForwardSetToReplica(set_data) => {
                             if self.cluster_hnd.send(super::cluster::Message::Set(set_data)).await.is_err() {
-                                error!("No replicas")
+                                tracing::trace!("No replicas")
                             };
                         },
                     }
@@ -182,12 +169,11 @@ impl Executor {
 }
 
 pub enum ConnectionMessage {
-    NewConnection(tokio::net::TcpStream),
+    NewConnection((tokio::net::TcpStream, SocketAddr)),
     FatalError(std::io::Error),
 }
 
 pub enum Message {
-    AddNewReplica(),
     ReplicateMaster((MasterAddr, tokio::sync::oneshot::Sender<TcpStream>)),
     ForwardSetToReplica(SetData),
 }

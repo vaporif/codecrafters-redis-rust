@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{prelude::*, MasterAddr};
 use anyhow::Context;
 use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
@@ -81,4 +81,24 @@ impl Actor {
 
         Ok(self.master_stream.into_inner())
     }
+}
+
+pub fn spawn_actor(
+    master_addr: MasterAddr,
+    port: u16,
+    on_complete_tx: tokio::sync::oneshot::Sender<TcpStream>,
+) {
+    tokio::spawn(async move {
+        let master_stream = tokio::net::TcpStream::connect(master_addr)
+            .await
+            .expect("failed to connect to master");
+        let actor = super::replication::Actor::new(master_stream).await;
+        let master_stream = actor
+            .replicate_from_scratch(port)
+            .await
+            .expect("failed to replicate");
+        on_complete_tx
+            .send(master_stream)
+            .expect("complete db sent");
+    });
 }
