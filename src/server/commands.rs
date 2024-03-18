@@ -1,15 +1,15 @@
 use std::time::Duration;
 
-use super::main_loop::ServerMode;
+use super::executor::ServerMode;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SetData {
     pub key: String,
     pub value: String,
     pub arguments: SetArguments,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SetArguments {
     pub ttl: Option<Duration>,
 }

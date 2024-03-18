@@ -1,6 +1,6 @@
 use super::{
     error::TransportError,
-    main_loop::{MasterInfo, ServerMode},
+    executor::{MasterInfo, ServerMode},
 };
 use bytes::Buf;
 use itertools::{Either, Itertools};
