@@ -49,6 +49,9 @@ impl Decoder for RespCodec {
             }
             Err(error) => match error {
                 serde_resp::Error::Eof => {
+                    // NOTE: Ughhh, since db transfer is not correct bulk string
+                    // since it doesn't have \r\n lets try to add them
+                    // and parse as bulk string
                     let mut bytes = src.clone();
                     let bytes_len = bytes.len();
                     bytes.extend("\r\n".bytes());
