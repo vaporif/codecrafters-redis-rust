@@ -47,6 +47,8 @@ impl Actor {
                         .expect("set completed")
                 }
             }
+
+            trace!("message processed");
         }
     }
 }
