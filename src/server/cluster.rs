@@ -44,7 +44,6 @@ impl Actor {
                         .slave_handler
                         .send(super::slave::Message::Set(set_data))
                         .await
-                        .expect("set completed")
                 }
             }
 

@@ -81,16 +81,10 @@ impl ActorHandle {
         Ok(())
     }
 
-    pub async fn send(
-        &self,
-        message: Message,
-    ) -> Result<usize, tokio::sync::broadcast::error::SendError<Message>> {
-        let res = self.broadcast.send(message);
-
-        if let Ok(count) = res {
-            trace!("broadcasted to {count} of slaves");
+    pub async fn send(&self, message: Message) {
+        match self.broadcast.send(message) {
+            Ok(count) => trace!("broadcasted to {count} of slaves"),
+            Err(_) => info!("no slaves connected"),
         }
-
-        res
     }
 }
