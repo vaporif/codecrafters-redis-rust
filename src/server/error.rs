@@ -11,7 +11,7 @@ pub enum TransportError {
     #[error("response error")]
     ResponseError(String),
     #[error("empty response")]
-    EmptyResponse(),
+    EmptyResponse,
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }

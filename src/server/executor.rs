@@ -135,6 +135,7 @@ impl Executor {
         loop {
             tokio::select! {
              Some(message) = self.connection_receiver.recv() => {
+                    trace!("executor message received {:?}", &message);
                     match message {
                         ConnectionMessage::NewConnection((stream, socket)) => {
                             let storage_hnd = self.storage_hnd.clone();
@@ -149,10 +150,11 @@ impl Executor {
                     }
                 }
              Some(message) = self.internal_receiver.recv() => {
+                    trace!("executor message received {:?}", &message);
                     match message {
                         Message::ReplicateMaster((ref master_addr, sender)) => {
                             let master_addr = master_addr.clone();
-                            super::replication::spawn_actor(master_addr, self.port, sender);
+                            super::replication::spawn_actor(master_addr, self.storage_hnd.clone(), self.port, sender);
                         },
                         // TODO: Buffer
                         Message::ForwardSetToReplica(set_data) => {
@@ -167,11 +169,13 @@ impl Executor {
     }
 }
 
+#[derive(Debug)]
 pub enum ConnectionMessage {
     NewConnection((tokio::net::TcpStream, SocketAddr)),
     FatalError(std::io::Error),
 }
 
+#[derive(Debug)]
 pub enum Message {
     ReplicateMaster((MasterAddr, tokio::sync::oneshot::Sender<TcpStream>)),
     ForwardSetToReplica(SetData),

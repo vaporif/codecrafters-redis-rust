@@ -7,23 +7,26 @@ use tokio_util::codec::Framed;
 use super::{
     codec::{RespCodec, RespStream},
     commands::RedisMessage,
+    storage,
 };
 
+#[allow(unused)]
 pub struct Actor {
     master_stream: RespStream,
+    storage_hnd: storage::ActorHandle,
 }
 
 impl Actor {
-    #[instrument]
-    pub async fn new(master_stream: TcpStream) -> Self {
+    pub async fn new(master_stream: TcpStream, storage_hnd: storage::ActorHandle) -> Self {
         let stream = Framed::new(master_stream, RespCodec);
         Self {
+            storage_hnd,
             master_stream: stream,
         }
     }
 
     #[instrument(skip(self))]
-    pub async fn replicate_from_scratch(mut self, port: u16) -> anyhow::Result<TcpStream> {
+    pub async fn run(mut self, port: u16) -> anyhow::Result<TcpStream> {
         self.master_stream.send(RedisMessage::Ping(None)).await?;
 
         let RedisMessage::Pong = self
@@ -89,6 +92,7 @@ impl Actor {
 #[allow(unused)]
 pub fn spawn_actor(
     master_addr: MasterAddr,
+    storage_hnd: storage::ActorHandle,
     port: u16,
     on_complete_tx: tokio::sync::oneshot::Sender<TcpStream>,
 ) {
@@ -96,11 +100,8 @@ pub fn spawn_actor(
         let master_stream = tokio::net::TcpStream::connect(master_addr)
             .await
             .expect("failed to connect to master");
-        let actor = super::replication::Actor::new(master_stream).await;
-        let master_stream = actor
-            .replicate_from_scratch(port)
-            .await
-            .expect("failed to replicate");
+        let actor = super::replication::Actor::new(master_stream, storage_hnd).await;
+        let master_stream = actor.run(port).await.expect("failed to replicate");
         // on_complete_tx
         //     .send(master_stream)
         //     .expect("complete db sent");
