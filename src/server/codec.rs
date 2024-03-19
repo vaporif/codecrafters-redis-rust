@@ -57,21 +57,23 @@ impl Encoder<RedisMessage> for RespCodec {
         dst: &mut bytes::BytesMut,
     ) -> std::prelude::v1::Result<(), Self::Error> {
         trace!("writing message {:?}", item);
-        match item {
+        let message_bytes = match item {
             RedisMessage::DbTransfer(db) => {
                 let mut data = format!("${}\r\n", db.len()).as_bytes().to_vec();
+                trace!("serialized db transfer");
                 data.extend(db);
-                dst.extend_from_slice(&data)
+                data
             }
             item => {
                 let item: RESP = item.into();
-                dst.extend_from_slice(
-                    &ser::to_string(&item)
-                        .context("serialize resp")?
-                        .into_bytes(),
-                );
+                let serialized = ser::to_string(&item).context("serialize resp")?;
+
+                trace!("serialized as {:?}", &serialized);
+                serialized.into_bytes()
             }
-        }
+        };
+
+        dst.extend_from_slice(&message_bytes);
 
         Ok(())
     }

@@ -60,6 +60,7 @@ impl Actor {
     #[instrument()]
     pub async fn run(mut self) -> anyhow::Result<()> {
         loop {
+            trace!("retrieving new message from client");
             match self.handle_connection().await {
                 Ok(connection_result) => match connection_result {
                     ConnectionResult::Handled => trace!("connection request handled"),
@@ -71,20 +72,25 @@ impl Actor {
                         return Ok(());
                     }
                 },
-                Err(err) => match err {
-                    TransportError::EmptyResponse() => {
-                        self.stream.close().await.context("closing stream")?;
-                        trace!("connection closed");
-                        return Ok(());
+                Err(err) => {
+                    self.stream.close().await.context("closing stream")?;
+                    match err {
+                        TransportError::EmptyResponse() => {
+                            trace!("connection closed");
+                            return Ok(());
+                        }
+                        s => {
+                            trace!("connection error {:?}", s)
+                        }
                     }
-                    s => Err(anyhow!("Transport error {:?}", s))?,
-                },
+                }
             };
         }
     }
 
     async fn handle_connection(&mut self) -> Result<ConnectionResult, TransportError> {
         let command = self.next_command().await?;
+        trace!("command received {:?}", command);
 
         match command {
             RedisMessage::Ping(_) => self.stream.send(RedisMessage::Pong).await?,
@@ -189,6 +195,12 @@ impl Actor {
         Ok(self.stream.send(message).await.context("sending message")?)
     }
 }
+
+// impl Drop for Actor {
+//     fn drop(&mut self) {
+//         self.stream.close();
+//     }
+// }
 
 pub fn spawn_actor(
     socket: SocketAddr,
