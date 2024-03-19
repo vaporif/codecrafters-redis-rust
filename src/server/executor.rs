@@ -154,7 +154,7 @@ impl Executor {
                     match message {
                         Message::ReplicateMaster((ref master_addr, sender)) => {
                             let master_addr = master_addr.clone();
-                            super::replication::spawn_actor(master_addr, self.storage_hnd.clone(), self.port, sender);
+                            super::replication::spawn_actor(master_addr, self.storage_hnd.clone(), self.executor_messenger.clone(), self.port, sender);
                         },
                         // TODO: Buffer
                         Message::ForwardSetToReplica(set_data) => {
@@ -162,6 +162,7 @@ impl Executor {
                                 tracing::trace!("No replicas to update");
                             };
                         },
+                        Message::FatalError(error) => bail!(format!("fatal error {:?}", error))
                     }
                 }
             }
@@ -179,4 +180,5 @@ pub enum ConnectionMessage {
 pub enum Message {
     ReplicateMaster((MasterAddr, tokio::sync::oneshot::Sender<TcpStream>)),
     ForwardSetToReplica(SetData),
+    FatalError(anyhow::Error),
 }

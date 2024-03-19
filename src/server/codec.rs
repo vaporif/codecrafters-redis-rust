@@ -24,6 +24,7 @@ impl Decoder for RespCodec {
 
     type Error = TransportError;
 
+    #[instrument(skip_all)]
     fn decode(
         &mut self,
         src: &mut bytes::BytesMut,
@@ -33,9 +34,11 @@ impl Decoder for RespCodec {
         }
 
         let cursor = Cursor::new(src.clone().freeze());
+        trace!("data {:?}", &cursor);
 
         let mut buff_reader = BufReader::new(cursor);
-        let message: serde_resp::RESP = de::from_buf_reader(&mut buff_reader)?;
+        let message: serde_resp::RESP =
+            de::from_buf_reader(&mut buff_reader).context("failed to parse")?;
 
         let final_position = buff_reader.into_inner().position();
 
@@ -51,6 +54,7 @@ impl Decoder for RespCodec {
 impl Encoder<RedisMessage> for RespCodec {
     type Error = anyhow::Error;
 
+    #[instrument(skip_all)]
     fn encode(
         &mut self,
         item: RedisMessage,

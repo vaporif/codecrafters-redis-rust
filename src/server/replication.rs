@@ -1,4 +1,4 @@
-use crate::{prelude::*, MasterAddr};
+use crate::{prelude::*, ExecutorMessenger, MasterAddr};
 use anyhow::Context;
 use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
@@ -8,7 +8,7 @@ use super::{
     codec::{RespCodec, RespStream},
     commands::RedisMessage,
     error::TransportError,
-    storage,
+    executor, storage,
 };
 
 pub struct Actor {
@@ -33,7 +33,8 @@ impl Actor {
             .master_stream
             .next()
             .await
-            .context("expecting pong response")??
+            .context("expecting repl pong response")?
+            .context("expecting pong response")?
         else {
             bail!("expecting pong reply")
         };
@@ -46,7 +47,8 @@ impl Actor {
             .master_stream
             .next()
             .await
-            .context("expecting repl response")??
+            .context("expecting repl ok response")?
+            .context("expecting ok response")?
         else {
             bail!("expecting ok reply")
         };
@@ -55,13 +57,15 @@ impl Actor {
             .send(RedisMessage::ReplConfCapa {
                 capa: "psync2".to_string(),
             })
-            .await?;
+            .await
+            .context("expecting send replconf")?;
 
         let RedisMessage::Ok = self
             .master_stream
             .next()
             .await
-            .context("expecting repl response")??
+            .context("expecting repl response")?
+            .context("expecting redis messsage")?
         else {
             bail!("expecting ok reply")
         };
@@ -80,7 +84,8 @@ impl Actor {
             .master_stream
             .next()
             .await
-            .context("expecting fullserync response")??
+            .context("expecting repl fullserync response")?
+            .context("expecting fullresync resp")?
         else {
             bail!("expecting fullresync reply")
         };
@@ -92,12 +97,13 @@ impl Actor {
 
     async fn handle_master_connection(&mut self) -> anyhow::Result<(), TransportError> {
         while let Some(command) = self.master_stream.next().await {
-            let command = command?;
+            let command = command.context("reading master connection")?;
             match command {
                 RedisMessage::Set(set_data) => {
                     self.storage_hnd
                         .send(storage::Message::Set(set_data, None))
-                        .await?;
+                        .await
+                        .context("sending set command")?;
                 }
                 s => Err(anyhow!("unsupported command {:?}", s))?,
             }
@@ -111,6 +117,7 @@ impl Actor {
 pub fn spawn_actor(
     master_addr: MasterAddr,
     storage_hnd: storage::ActorHandle,
+    executor_messenger: ExecutorMessenger,
     port: u16,
     on_complete_tx: tokio::sync::oneshot::Sender<TcpStream>,
 ) {
@@ -119,6 +126,12 @@ pub fn spawn_actor(
             .await
             .expect("failed to connect to master");
         let actor = super::replication::Actor::new(master_stream, storage_hnd).await;
-        actor.run(port).await.expect("failed to replicate");
+        if let Err(err) = actor.run(port).await.context("failed to replicate") {
+            executor_messenger
+                .internal_sender
+                .send(executor::Message::FatalError(err))
+                .await
+                .expect("error notified")
+        }
     });
 }
