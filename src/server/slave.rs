@@ -52,7 +52,7 @@ impl Actor {
                 }
             }
 
-            trace!("processed");
+            trace!("slave processed messages");
         }
     }
 }
@@ -85,6 +85,12 @@ impl ActorHandle {
         &self,
         message: Message,
     ) -> Result<usize, tokio::sync::broadcast::error::SendError<Message>> {
-        self.broadcast.send(message)
+        let res = self.broadcast.send(message);
+
+        if let Ok(count) = res {
+            trace!("broadcasted to {count} of slaves");
+        }
+
+        res
     }
 }
