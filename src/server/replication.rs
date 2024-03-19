@@ -83,6 +83,7 @@ impl Actor {
     }
 }
 
+#[allow(unused)]
 pub fn spawn_actor(
     master_addr: MasterAddr,
     port: u16,
@@ -97,8 +98,8 @@ pub fn spawn_actor(
             .replicate_from_scratch(port)
             .await
             .expect("failed to replicate");
-        on_complete_tx
-            .send(master_stream)
-            .expect("complete db sent");
+        // on_complete_tx
+        //     .send(master_stream)
+        //     .expect("complete db sent");
     });
 }

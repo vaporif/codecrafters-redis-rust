@@ -13,19 +13,20 @@ fn init_tracing() {
         env::set_var("RUST_LOG", "trace")
     }
 
+    env::set_var("RUST_BACKTRACE", "full");
+
     let subscriber = tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
         .with(EnvFilter::from_default_env());
 
-    #[cfg(console_subscriber)]
+    #[cfg(feature = "debug")]
     {
         subscriber.with(console_subscriber::spawn()).init();
-        tracing::trace!("tokio console enabled");
+        println!("tokio console enabled");
     }
 
-    #[cfg(not(console_subscriber))]
+    #[cfg(not(feature = "debug"))]
     {
-        // This block will only be compiled in release mode
         subscriber.init();
     }
 }

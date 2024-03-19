@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::usize;
 
 use futures::SinkExt;
 use tokio::net::TcpStream;
@@ -24,29 +24,28 @@ struct Actor {
 
 impl Actor {
     async fn new(
-        slave_addr: SocketAddr,
+        slave_stream: Framed<TcpStream, RespCodec>,
         receive: tokio::sync::broadcast::Receiver<Message>,
     ) -> anyhow::Result<Self> {
-        trace!("connecting to new slave {:?}", &slave_addr);
-        let slave_stream = TcpStream::connect(slave_addr)
-            .await
-            .context("failed to connect")?;
-        trace!("connected to {:?}", &slave_addr);
-        let slave_stream = Framed::new(slave_stream, RespCodec);
+        trace!("connecting to new slave");
         Ok(Self {
             slave_stream,
             receive,
         })
     }
 
+    #[instrument(skip(self))]
     async fn run(&mut self) {
         while let Ok(message) = self.receive.recv().await {
             match message {
                 Message::Set(set_data) => {
+                    trace!("forwarding set to replica");
                     self.slave_stream
                         .send(RedisMessage::Set(set_data))
                         .await
                         .expect("sent set to slave");
+
+                    trace!("replica processed");
                 }
             }
         }
@@ -64,13 +63,14 @@ impl ActorHandle {
         Self { broadcast }
     }
 
-    pub async fn start_slave(&self, slave_addr: SocketAddr) -> anyhow::Result<()> {
-        let mut actor = Actor::new(slave_addr, self.broadcast.subscribe()).await?;
+    pub async fn start_slave(
+        &self,
+        slave_stream: Framed<TcpStream, RespCodec>,
+    ) -> anyhow::Result<()> {
+        let mut actor = Actor::new(slave_stream, self.broadcast.subscribe()).await?;
         tokio::spawn(async move {
             tracing::trace!("slave actor started");
-            loop {
-                actor.run().await;
-            }
+            actor.run().await;
         });
 
         Ok(())

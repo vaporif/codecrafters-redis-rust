@@ -104,7 +104,7 @@ impl Actor {
             .internal_sender
             .send(super::executor::Message::ForwardSetToReplica(set_msg))
             .await
-            .expect("sent");
+            .context("could not send forwarding req")?;
 
         reply_channel_tx
             .send(Ok(()))

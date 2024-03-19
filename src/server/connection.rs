@@ -8,7 +8,7 @@ use tokio::sync::oneshot;
 
 use super::{
     cluster,
-    codec::RespCodec,
+    codec::{RespCodec, RespStream},
     commands::*,
     error::TransportError,
     executor::{MasterInfo, ServerMode},
@@ -16,41 +16,54 @@ use super::{
 };
 use crate::{prelude::*, server::rdb::Rdb, ExecutorMessenger};
 
-#[derive(Clone)]
-pub struct NewConnection {
-    pub storage_hnd: storage::ActorHandle,
-    pub cluster_hnd: cluster::ActorHandle,
-    pub server_mode: ServerMode,
-}
-
 #[allow(unused)]
 pub struct Actor {
-    slave_listening_port: Option<u16>,
     executor_messenger: ExecutorMessenger,
+    storage_hnd: storage::ActorHandle,
+    cluster_hnd: cluster::ActorHandle,
+    server_mode: ServerMode,
     stream_socket: SocketAddr,
-    stream: Framed<TcpStream, RespCodec>,
+    stream: RespStream,
+}
+
+enum ConnectionResult {
+    Handled,
+    SwitchToSlave,
 }
 
 impl Actor {
     pub fn new(
         executor_messenger: ExecutorMessenger,
+        storage_hnd: storage::ActorHandle,
+        cluster_hnd: cluster::ActorHandle,
+        server_mode: ServerMode,
         stream_socket: SocketAddr,
         stream: TcpStream,
     ) -> Self {
         let stream = Framed::new(stream, RespCodec);
         Self {
-            slave_listening_port: None,
+            storage_hnd,
+            cluster_hnd,
+            server_mode,
             executor_messenger,
             stream_socket,
             stream,
         }
     }
 
-    pub async fn run(&mut self, new_connection: NewConnection) -> anyhow::Result<()> {
+    pub async fn run(mut self) -> anyhow::Result<()> {
         loop {
-            let new_connection = new_connection.clone();
-            match self.handle_connection(new_connection).await {
-                Ok(_) => trace!("connection request handled"),
+            match self.handle_connection().await {
+                Ok(connection_result) => match connection_result {
+                    ConnectionResult::Handled => trace!("connection request handled"),
+                    ConnectionResult::SwitchToSlave => {
+                        self.cluster_hnd
+                            .send(cluster::Message::AddNewSlave(self.stream))
+                            .await
+                            .context("sending add new slave")?;
+                        return Ok(());
+                    }
+                },
                 Err(err) => match err {
                     TransportError::EmptyResponse() => {
                         self.stream.close().await.context("closing stream")?;
@@ -59,20 +72,11 @@ impl Actor {
                     }
                     s => Err(anyhow!("Transport error {:?}", s))?,
                 },
-            }
+            };
         }
     }
 
-    async fn handle_connection(
-        &mut self,
-        new_connection: NewConnection,
-    ) -> Result<(), TransportError> {
-        let NewConnection {
-            storage_hnd,
-            server_mode,
-            cluster_hnd,
-        } = new_connection;
-
+    async fn handle_connection(&mut self) -> Result<ConnectionResult, TransportError> {
         let command = self.next_command().await?;
 
         match command {
@@ -84,7 +88,7 @@ impl Actor {
             }
             RedisMessage::Set(set_data) => {
                 let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
-                storage_hnd
+                self.storage_hnd
                     .send(storage::Message::Set(set_data, reply_channel_tx))
                     .await
                     .context("sending set store command")?;
@@ -97,54 +101,40 @@ impl Actor {
                 self.stream.send(message).await?
             }
             RedisMessage::ReplConfCapa { .. } => self.stream.send(RedisMessage::Ok).await?,
-            RedisMessage::ReplConfPort { port } => {
-                self.slave_listening_port = Some(port);
-                self.stream.send(RedisMessage::Ok).await?
-            }
+            RedisMessage::ReplConfPort { .. } => self.stream.send(RedisMessage::Ok).await?,
             RedisMessage::Psync {
                 replication_id,
                 offset,
             } => match (replication_id.as_str(), offset) {
-                ("?", -1) => match self.slave_listening_port {
-                    Some(port) => {
-                        let ServerMode::Master(MasterInfo {
-                            ref master_replid, ..
-                        }) = server_mode
-                        else {
-                            return Err(TransportError::Other(anyhow!(
-                                "server in slave mode".to_string()
-                            )));
-                        };
+                ("?", -1) => {
+                    let ServerMode::Master(MasterInfo {
+                        ref master_replid, ..
+                    }) = self.server_mode
+                    else {
+                        return Err(TransportError::Other(anyhow!(
+                            "server in slave mode".to_string()
+                        )));
+                    };
 
-                        let resync_msq = RedisMessage::FullResync {
-                            replication_id: master_replid.clone(),
-                            offset: 0,
-                        };
+                    let resync_msq = RedisMessage::FullResync {
+                        replication_id: master_replid.clone(),
+                        offset: 0,
+                    };
 
-                        self.stream.send(resync_msq).await?;
+                    self.stream.send(resync_msq).await?;
 
-                        let db = Rdb::empty();
-                        let db = RedisMessage::DbTransfer(db.to_vec());
+                    let db = Rdb::empty();
+                    let db = RedisMessage::DbTransfer(db.to_vec());
 
-                        self.stream.send(db).await?;
+                    self.stream.send(db).await?;
 
-                        let slave_socket = SocketAddr::new(self.stream_socket.ip(), port);
-
-                        cluster_hnd
-                            .send(cluster::Message::AddNewSlave(slave_socket))
-                            .await?
-                    }
-                    None => {
-                        self.stream
-                            .send(RedisMessage::Err("port unknown".to_string()))
-                            .await?
-                    }
-                },
+                    return Ok(ConnectionResult::SwitchToSlave);
+                }
                 _ => todo!(),
             },
             RedisMessage::Get(key) => {
                 let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
-                storage_hnd
+                self.storage_hnd
                     .send(storage::Message::Get(key, reply_channel_tx))
                     .await
                     .context("sending set store command")?;
@@ -162,7 +152,7 @@ impl Actor {
             RedisMessage::Info(info_data) => match info_data {
                 InfoCommand::Replication => {
                     self.stream
-                        .send(RedisMessage::InfoResponse(server_mode.clone()))
+                        .send(RedisMessage::InfoResponse(self.server_mode.clone()))
                         .await?
                 }
             },
@@ -175,7 +165,7 @@ impl Actor {
             }
         };
 
-        Ok(())
+        Ok(ConnectionResult::Handled)
     }
 
     #[tracing::instrument(skip(self))]
@@ -202,14 +192,18 @@ pub fn spawn_actor(
     server_mode: ServerMode,
 ) {
     tokio::spawn(async move {
-        let new_connection = NewConnection {
+        let actor = super::connection::Actor::new(
+            executor_messenger,
             storage_hnd,
-            server_mode,
             cluster_hnd,
-        };
-        let mut actor = super::connection::Actor::new(executor_messenger, socket, stream);
-        if let Err(err) = actor.run(new_connection).await {
+            server_mode,
+            socket,
+            stream,
+        );
+        if let Err(err) = actor.run().await {
             error!("connection failure {:?}", err);
         }
+
+        trace!("actor exited");
     });
 }

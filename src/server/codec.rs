@@ -9,7 +9,7 @@ use std::{
     io::{BufReader, Cursor},
     time::Duration,
 };
-use tokio_util::codec::{Decoder, Encoder};
+use tokio_util::codec::{Decoder, Encoder, Framed};
 
 use super::commands::*;
 use crate::prelude::*;
@@ -17,26 +17,27 @@ use crate::prelude::*;
 #[derive(Debug)]
 pub struct RespCodec;
 
+pub type RespStream = Framed<tokio::net::TcpStream, RespCodec>;
+
 impl Decoder for RespCodec {
     type Item = RedisMessage;
 
     type Error = TransportError;
 
-    #[instrument]
+    // #[instrument]
     fn decode(
         &mut self,
         src: &mut bytes::BytesMut,
     ) -> std::prelude::v1::Result<Option<Self::Item>, Self::Error> {
         if src.is_empty() {
-            trace!("empty message from network");
             return Ok(None);
         }
 
         let cursor = Cursor::new(src.clone().freeze());
 
-        trace!("bytes buffer {:?}", cursor);
         let mut buff_reader = BufReader::new(cursor);
         let message: serde_resp::RESP = de::from_buf_reader(&mut buff_reader)?;
+        trace!("command {:?}", &message);
 
         let final_position = buff_reader.into_inner().position();
 
@@ -50,7 +51,7 @@ impl Decoder for RespCodec {
 impl Encoder<RedisMessage> for RespCodec {
     type Error = anyhow::Error;
 
-    #[instrument]
+    // #[instrument]
     fn encode(
         &mut self,
         item: RedisMessage,
@@ -64,6 +65,7 @@ impl Encoder<RedisMessage> for RespCodec {
             }
             item => {
                 let item: RESP = item.into();
+                trace!("writing message {:?}", item);
                 dst.extend_from_slice(
                     &ser::to_string(&item)
                         .context("serialize resp")?
@@ -278,7 +280,13 @@ impl From<RedisMessage> for RESP {
             RedisMessage::Ping(_) => array![bulk!(b"PING".to_vec())],
             RedisMessage::Pong => simple!("PONG".to_string()),
             RedisMessage::Echo(_) => todo!(),
-            RedisMessage::Set(_) => todo!(),
+            RedisMessage::Set(set_data) => {
+                array![
+                    bulk!(b"SET".to_vec()),
+                    bulk!(set_data.key.into_bytes()),
+                    bulk!(set_data.value.into_bytes())
+                ]
+            }
             RedisMessage::Get(_) => todo!(),
             RedisMessage::ReplConfPort { port } => array![
                 bulk!(b"REPLCONF".to_vec()),

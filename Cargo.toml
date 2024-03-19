@@ -13,7 +13,7 @@ rust-version = "1.70"
 edition = "2021"
 
 [features]
-tokio-console = ["console-subscriber"]
+debug = ["console-subscriber"]
 # DON'T EDIT THIS!
 #
 # Codecrafters relies on this file being intact to run tests successfully. Any changes

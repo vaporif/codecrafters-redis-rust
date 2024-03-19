@@ -1,19 +1,22 @@
-use std::{collections::HashSet, net::SocketAddr};
+use std::{collections::HashSet, net::IpAddr};
+
+use tokio::net::TcpStream;
+use tokio_util::codec::Framed;
 
 pub use crate::prelude::*;
 
-use super::commands::SetData;
+use super::{codec::RespCodec, commands::SetData};
 
 pub type MasterAddr = (String, u16);
 #[derive(Debug)]
 #[allow(unused)]
 pub enum Message {
-    AddNewSlave(SocketAddr),
+    AddNewSlave(Framed<TcpStream, RespCodec>),
     Set(SetData),
 }
 
 pub struct Actor {
-    slaves: Option<HashSet<SocketAddr>>,
+    slaves: Option<HashSet<IpAddr>>,
     slave_handler: super::slave::ActorHandle,
     receiver: tokio::sync::mpsc::UnboundedReceiver<Message>,
 }
@@ -31,19 +34,22 @@ impl Actor {
         }
     }
 
+    #[instrument(skip(self))]
     async fn run(&mut self) {
         while let Some(message) = self.receiver.recv().await {
             trace!("new message {:?}", &message);
             match message {
-                Message::AddNewSlave(socket_addr) => {
+                Message::AddNewSlave(stream) => {
                     let slaves = self.slaves.get_or_insert(HashSet::new());
-                    if let Err(error) = self.slave_handler.start_slave(socket_addr).await {
+                    if let Err(error) = self.slave_handler.start_slave(stream).await {
                         error!("failed to connect {:?}", error);
                     }
 
+                    trace!("slave running");
+
                     // TODO: cover remove & drop & close of handle
-                    _ = slaves.insert(socket_addr);
-                    trace!("slave added, slaves in collection {:?}", slaves);
+                    // _ = slaves.insert(stream.sock);
+                    // trace!("slave added, slaves in collection {:?}", slaves);
                 }
                 Message::Set(set_data) => {
                     _ = self
