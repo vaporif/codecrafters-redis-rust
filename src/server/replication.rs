@@ -7,10 +7,10 @@ use tokio_util::codec::Framed;
 use super::{
     codec::{RespCodec, RespStream},
     commands::RedisMessage,
+    error::TransportError,
     storage,
 };
 
-#[allow(unused)]
 pub struct Actor {
     master_stream: RespStream,
     storage_hnd: storage::ActorHandle,
@@ -26,7 +26,7 @@ impl Actor {
     }
 
     #[instrument(skip(self))]
-    pub async fn run(mut self, port: u16) -> anyhow::Result<TcpStream> {
+    pub async fn run(mut self, port: u16) -> anyhow::Result<()> {
         self.master_stream.send(RedisMessage::Ping(None)).await?;
 
         let RedisMessage::Pong = self
@@ -85,7 +85,25 @@ impl Actor {
             bail!("expecting fullresync reply")
         };
 
-        Ok(self.master_stream.into_inner())
+        self.handle_master_connection().await?;
+
+        Ok(())
+    }
+
+    async fn handle_master_connection(&mut self) -> anyhow::Result<(), TransportError> {
+        while let Some(command) = self.master_stream.next().await {
+            let command = command?;
+            match command {
+                RedisMessage::Set(set_data) => {
+                    self.storage_hnd
+                        .send(storage::Message::Set(set_data, None))
+                        .await?;
+                }
+                s => Err(anyhow!("unsupported command {:?}", s))?,
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -101,9 +119,6 @@ pub fn spawn_actor(
             .await
             .expect("failed to connect to master");
         let actor = super::replication::Actor::new(master_stream, storage_hnd).await;
-        let master_stream = actor.run(port).await.expect("failed to replicate");
-        // on_complete_tx
-        //     .send(master_stream)
-        //     .expect("complete db sent");
+        actor.run(port).await.expect("failed to replicate");
     });
 }

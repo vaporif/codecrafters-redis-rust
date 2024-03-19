@@ -33,6 +33,7 @@ pub struct Actor {
 }
 
 enum ConnectionResult {
+    EmptyResponse,
     SwitchToSlaveMode,
 }
 
@@ -59,20 +60,15 @@ impl Actor {
     #[instrument]
     pub async fn run(mut self) -> anyhow::Result<()> {
         trace!("retrieving new message from client");
-        match self.handle_connection().await {
-            Ok(connection_result) => match connection_result {
-                ConnectionResult::SwitchToSlaveMode => {
-                    self.cluster_hnd
-                        .send(cluster::Message::AddNewSlave((self.socket, self.stream)))
-                        .await
-                        .context("sending add new slave")?;
-                    Ok(())
-                }
-            },
-            Err(err) => {
-                self.stream.close().await.context("closing stream")?;
-                Err(anyhow!(err))
+        match self.handle_connection().await? {
+            ConnectionResult::SwitchToSlaveMode => {
+                self.cluster_hnd
+                    .send(cluster::Message::AddNewSlave((self.socket, self.stream)))
+                    .await
+                    .context("sending add new slave")?;
+                Ok(())
             }
+            ConnectionResult::EmptyResponse => self.stream.close().await.context("closing stream"),
         }
     }
 
@@ -92,7 +88,7 @@ impl Actor {
                 RedisMessage::Set(set_data) => {
                     let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
                     self.storage_hnd
-                        .send(storage::Message::Set(set_data, reply_channel_tx))
+                        .send(storage::Message::Set(set_data, Some(reply_channel_tx)))
                         .await
                         .context("sending set store command")?;
 
@@ -171,20 +167,9 @@ impl Actor {
             }
         }
 
-        Err(TransportError::EmptyResponse)
-    }
-
-    #[tracing::instrument(skip(self))]
-    async fn send_response(&mut self, message: RedisMessage) -> Result<(), TransportError> {
-        Ok(self.stream.send(message).await.context("sending message")?)
+        Ok(ConnectionResult::EmptyResponse)
     }
 }
-
-// impl Drop for Actor {
-//     fn drop(&mut self) {
-//         self.stream.close();
-//     }
-// }
 
 pub fn spawn_actor(
     socket: SocketAddr,

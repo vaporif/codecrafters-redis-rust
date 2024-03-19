@@ -11,7 +11,7 @@ pub type SetReplyChannel = oneshot::Sender<Result<()>>;
 #[derive(Debug)]
 pub enum Message {
     Get(String, GetReplyChannel),
-    Set(SetData, SetReplyChannel),
+    Set(SetData, Option<SetReplyChannel>),
 }
 // TODO: Add sharding & active expiration
 pub struct Actor {
@@ -80,7 +80,7 @@ impl Actor {
     async fn process_set_command(
         &mut self,
         set_data: SetData,
-        reply_channel_tx: SetReplyChannel,
+        reply_channel_tx: Option<SetReplyChannel>,
     ) -> anyhow::Result<()> {
         let set_msg = set_data.clone();
         let SetData {
@@ -107,9 +107,13 @@ impl Actor {
             .await
             .context("could not send forwarding req")?;
 
-        reply_channel_tx
-            .send(Ok(()))
-            .map_err(|_| anyhow::Error::msg(format!("could not send result for set {key}")))
+        if let Some(reply_channel_tx) = reply_channel_tx {
+            reply_channel_tx
+                .send(Ok(()))
+                .map_err(|_| anyhow::Error::msg(format!("could not send result for set {key}")))?
+        }
+
+        Ok(())
     }
 }
 

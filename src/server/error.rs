@@ -10,8 +10,6 @@ pub enum TransportError {
     ParseError(#[from] serde_resp::Error),
     #[error("response error")]
     ResponseError(String),
-    #[error("empty response")]
-    EmptyResponse,
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
