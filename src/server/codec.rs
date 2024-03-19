@@ -15,6 +15,7 @@ use super::commands::*;
 use crate::prelude::*;
 
 #[derive(Debug)]
+
 pub struct RespCodec;
 
 pub type RespStream = Framed<tokio::net::TcpStream, RespCodec>;
@@ -34,20 +35,38 @@ impl Decoder for RespCodec {
         }
 
         let cursor = Cursor::new(src.clone().freeze());
-        trace!("data {:?}", &cursor);
-
         let mut buff_reader = BufReader::new(cursor);
-        let message: serde_resp::RESP =
-            de::from_buf_reader(&mut buff_reader).context("failed to parse")?;
+        let message: serde_resp::Result<RESP> = de::from_buf_reader(&mut buff_reader);
+        match message {
+            Ok(message) => {
+                let final_position = buff_reader.into_inner().position();
+                src.advance(final_position as usize);
+                let message = RedisMessage::try_from(message)
+                    .context("could not parse resp to redis message")?;
 
-        let final_position = buff_reader.into_inner().position();
+                trace!("received {:?}", &message);
+                Ok(Some(message))
+            }
+            Err(error) => match error {
+                serde_resp::Error::Eof => {
+                    let mut bytes = src.clone();
+                    let bytes_len = bytes.len();
+                    bytes.extend("\r\n".bytes());
+                    let cursor = Cursor::new(bytes.freeze());
+                    let mut buff_reader = BufReader::new(cursor);
+                    let parsed: serde_resp::Result<RESP> = de::from_buf_reader(&mut buff_reader);
 
-        // NOTE: I expect all packets at once
-        src.advance(final_position as usize);
-        let command = RedisMessage::try_from(message)?;
+                    if let Ok(RESP::BulkString(Some(data))) = parsed {
+                        src.advance(bytes_len);
 
-        trace!("received {:?}", &command);
-        Ok(Some(command))
+                        return Ok(Some(RedisMessage::DbTransfer(data)));
+                    }
+
+                    return Ok(None);
+                }
+                e => Err(anyhow!(e).into()),
+            },
+        }
     }
 }
 
@@ -323,7 +342,7 @@ impl From<RedisMessage> for RESP {
             RedisMessage::CacheNotFound => bulk_null!(),
             RedisMessage::InfoResponse(server_mode) => server_mode.to_resp(),
             RedisMessage::DbTransfer(_) => {
-                unreachable!("thank god redis for not following their own protocol, won't work")
+                panic!("db transfer is not proper resp messag")
             }
         }
     }
