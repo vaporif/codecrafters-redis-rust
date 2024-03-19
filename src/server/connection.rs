@@ -17,18 +17,24 @@ use super::{
 use crate::{prelude::*, server::rdb::Rdb, ExecutorMessenger};
 
 #[allow(unused)]
+#[derive(DebugExtras)]
 pub struct Actor {
+    #[debug_ignore]
     executor_messenger: ExecutorMessenger,
+    #[debug_ignore]
     storage_hnd: storage::ActorHandle,
+    #[debug_ignore]
     cluster_hnd: cluster::ActorHandle,
+    #[debug_ignore]
     server_mode: ServerMode,
-    stream_socket: SocketAddr,
+    socket: SocketAddr,
+    #[debug_ignore]
     stream: RespStream,
 }
 
 enum ConnectionResult {
     Handled,
-    SwitchToSlave,
+    SwitchToSlaveMode,
 }
 
 impl Actor {
@@ -46,19 +52,20 @@ impl Actor {
             cluster_hnd,
             server_mode,
             executor_messenger,
-            stream_socket,
+            socket: stream_socket,
             stream,
         }
     }
 
+    #[instrument()]
     pub async fn run(mut self) -> anyhow::Result<()> {
         loop {
             match self.handle_connection().await {
                 Ok(connection_result) => match connection_result {
                     ConnectionResult::Handled => trace!("connection request handled"),
-                    ConnectionResult::SwitchToSlave => {
+                    ConnectionResult::SwitchToSlaveMode => {
                         self.cluster_hnd
-                            .send(cluster::Message::AddNewSlave(self.stream))
+                            .send(cluster::Message::AddNewSlave((self.socket, self.stream)))
                             .await
                             .context("sending add new slave")?;
                         return Ok(());
@@ -128,7 +135,7 @@ impl Actor {
 
                     self.stream.send(db).await?;
 
-                    return Ok(ConnectionResult::SwitchToSlave);
+                    return Ok(ConnectionResult::SwitchToSlaveMode);
                 }
                 _ => todo!(),
             },

@@ -1,13 +1,11 @@
-use std::usize;
+use std::net::SocketAddr;
 
 use futures::SinkExt;
-use tokio::net::TcpStream;
-use tokio_util::codec::Framed;
 
 use crate::prelude::*;
 
 use super::{
-    codec::RespCodec,
+    codec::RespStream,
     commands::{RedisMessage, SetData},
 };
 
@@ -17,37 +15,44 @@ pub enum Message {
     Set(SetData),
 }
 
+#[allow(unused)]
+#[derive(DebugExtras)]
 struct Actor {
-    slave_stream: Framed<TcpStream, RespCodec>,
+    socket: SocketAddr,
+    #[debug_ignore]
+    slave_stream: RespStream,
+    #[debug_ignore]
     receive: tokio::sync::broadcast::Receiver<Message>,
 }
 
 impl Actor {
     async fn new(
-        slave_stream: Framed<TcpStream, RespCodec>,
+        socket: SocketAddr,
+        slave_stream: RespStream,
         receive: tokio::sync::broadcast::Receiver<Message>,
     ) -> anyhow::Result<Self> {
-        trace!("connecting to new slave");
         Ok(Self {
+            socket,
             slave_stream,
             receive,
         })
     }
 
-    #[instrument(skip(self))]
+    #[instrument]
     async fn run(&mut self) {
+        trace!("switched to slave mode");
         while let Ok(message) = self.receive.recv().await {
+            trace!("received {:?}", message);
             match message {
                 Message::Set(set_data) => {
-                    trace!("forwarding set to replica");
                     self.slave_stream
                         .send(RedisMessage::Set(set_data))
                         .await
                         .expect("sent set to slave");
-
-                    trace!("replica processed");
                 }
             }
+
+            trace!("processed");
         }
     }
 }
@@ -65,11 +70,11 @@ impl ActorHandle {
 
     pub async fn start_slave(
         &self,
-        slave_stream: Framed<TcpStream, RespCodec>,
+        socket: SocketAddr,
+        slave_stream: RespStream,
     ) -> anyhow::Result<()> {
-        let mut actor = Actor::new(slave_stream, self.broadcast.subscribe()).await?;
+        let mut actor = Actor::new(socket, slave_stream, self.broadcast.subscribe()).await?;
         tokio::spawn(async move {
-            tracing::trace!("slave actor started");
             actor.run().await;
         });
 

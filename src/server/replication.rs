@@ -4,10 +4,13 @@ use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
-use super::{codec::RespCodec, commands::RedisMessage};
+use super::{
+    codec::{RespCodec, RespStream},
+    commands::RedisMessage,
+};
 
 pub struct Actor {
-    master_stream: Framed<TcpStream, RespCodec>,
+    master_stream: RespStream,
 }
 
 impl Actor {

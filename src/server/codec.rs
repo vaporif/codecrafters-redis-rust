@@ -24,7 +24,6 @@ impl Decoder for RespCodec {
 
     type Error = TransportError;
 
-    // #[instrument]
     fn decode(
         &mut self,
         src: &mut bytes::BytesMut,
@@ -37,13 +36,14 @@ impl Decoder for RespCodec {
 
         let mut buff_reader = BufReader::new(cursor);
         let message: serde_resp::RESP = de::from_buf_reader(&mut buff_reader)?;
-        trace!("command {:?}", &message);
 
         let final_position = buff_reader.into_inner().position();
 
         // NOTE: I expect all packets at once
         src.advance(final_position as usize);
         let command = RedisMessage::try_from(message)?;
+
+        trace!("received {:?}", &command);
         Ok(Some(command))
     }
 }
@@ -51,12 +51,12 @@ impl Decoder for RespCodec {
 impl Encoder<RedisMessage> for RespCodec {
     type Error = anyhow::Error;
 
-    // #[instrument]
     fn encode(
         &mut self,
         item: RedisMessage,
         dst: &mut bytes::BytesMut,
     ) -> std::prelude::v1::Result<(), Self::Error> {
+        trace!("writing message {:?}", item);
         match item {
             RedisMessage::DbTransfer(db) => {
                 let mut data = format!("${}\r\n", db.len()).as_bytes().to_vec();
@@ -65,7 +65,6 @@ impl Encoder<RedisMessage> for RespCodec {
             }
             item => {
                 let item: RESP = item.into();
-                trace!("writing message {:?}", item);
                 dst.extend_from_slice(
                     &ser::to_string(&item)
                         .context("serialize resp")?

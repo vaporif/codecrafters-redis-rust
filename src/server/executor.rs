@@ -132,18 +132,17 @@ impl Executor {
     }
 
     async fn run(mut self) -> anyhow::Result<()> {
-        trace!("waiting on channels");
         loop {
             tokio::select! {
              Some(message) = self.connection_receiver.recv() => {
                     match message {
-                        ConnectionMessage::NewConnection((stream, socket_addr)) => {
+                        ConnectionMessage::NewConnection((stream, socket)) => {
                             let storage_hnd = self.storage_hnd.clone();
                             let executor_messenger = self.executor_messenger.clone();
                             let server_mode = self.server_mode.clone();
                             let cluster_hnd = self.cluster_hnd.clone();
 
-                            super::connection::spawn_actor(socket_addr, stream, executor_messenger, storage_hnd, cluster_hnd, server_mode)
+                            super::connection::spawn_actor(socket, stream, executor_messenger, storage_hnd, cluster_hnd, server_mode)
 
                         }
                         ConnectionMessage::FatalError(error) => bail!(format!("fatal error {:?}", error)),

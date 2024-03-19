@@ -36,6 +36,7 @@ impl Actor {
 
     #[instrument(skip_all)]
     pub async fn run(&mut self) {
+        trace!("storage actor started");
         while let Some(command) = self.receive_channel.recv().await {
             trace!("new command received {:?}", &command);
             let command_result = match command {
@@ -123,10 +124,7 @@ impl ActorHandle {
 
         let mut actor = Actor::new(executor_messenger, receive);
         tokio::spawn(async move {
-            trace!("storage actor started");
-            loop {
-                actor.run().await;
-            }
+            actor.run().await;
         });
 
         Self { sender }

@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use derive_debug_extras::DebugExtras;
+
 use super::executor::ServerMode;
 
 #[derive(Debug, Clone)]
@@ -15,7 +17,7 @@ pub struct SetArguments {
 }
 
 #[allow(unused)]
-#[derive(Debug)]
+#[derive(DebugExtras)]
 pub enum RedisMessage {
     Ping(Option<String>),
     Pong,
@@ -27,7 +29,7 @@ pub enum RedisMessage {
     Get(String),
     Psync { replication_id: String, offset: i32 },
     FullResync { replication_id: String, offset: i32 },
-    DbTransfer(Vec<u8>),
+    DbTransfer(#[debug_ignore] Vec<u8>),
     ReplConfPort { port: u16 },
     ReplConfCapa { capa: String },
     Info(InfoCommand),
