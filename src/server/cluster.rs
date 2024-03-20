@@ -75,6 +75,7 @@ impl ActorHandle {
         Self { sender }
     }
 
+    #[instrument(skip(self))]
     pub async fn send(&self, message: Message) -> Result<()> {
         self.sender.send(message).context("sending message")
     }

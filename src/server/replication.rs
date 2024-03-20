@@ -90,15 +90,16 @@ impl Actor {
             bail!("expecting fullresync reply")
         };
 
-        let RedisMessage::DbTransfer(_) = self
-            .master_stream
-            .next()
-            .await
-            .context("expecting repl db response")?
-            .context("expecting db resp")?
-        else {
-            bail!("expecting fullresync reply")
-        };
+        let expected_db = self.master_stream.next().await;
+
+        match expected_db {
+            Some(Ok(RedisMessage::DbTransfer(_))) => {
+                info!("db received");
+            }
+            _ => {
+                info!("db not sent back");
+            }
+        }
 
         trace!("connected to master");
 
