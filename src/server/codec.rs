@@ -41,8 +41,8 @@ impl Decoder for RespCodec {
             Ok(message) => {
                 let final_position = buff_reader.into_inner().position();
                 src.advance(final_position as usize);
-                let message = RedisMessage::try_from(message)
-                    .context("could not parse resp to redis message")?;
+                let message =
+                    RedisMessage::try_from(message).map_err(|_| TransportError::UnknownCommand)?;
 
                 trace!("received {:?}", &message);
                 Ok(Some(message))
@@ -196,7 +196,7 @@ impl RedisMessage {
                     offset,
                 })
             }
-            s => Err(TransportError::UnknownCommand(s.to_string())),
+            _ => Err(TransportError::UnknownCommand)?,
         }
     }
 
@@ -236,10 +236,7 @@ impl RedisMessage {
                         "PX" => {
                             set_data.arguments.ttl = Some(Duration::from_millis(ttl));
                         }
-                        s => Err(TransportError::UnknownCommand(format!(
-                            "unknown args {} for command set",
-                            s
-                        )))?,
+                        _ => Err(TransportError::UnknownCommand)?,
                     }
                 }
 
@@ -293,10 +290,10 @@ impl RedisMessage {
                 let subcommand = subcommand.to_uppercase();
                 match subcommand.as_str() {
                     "REPLICATION" => Ok(RedisMessage::Info(InfoCommand::Replication)),
-                    s => Err(TransportError::UnknownCommand(s.to_string())),
+                    _ => Err(TransportError::UnknownCommand),
                 }
             }
-            s => Err(TransportError::UnknownCommand(s.to_string())),
+            _ => Err(TransportError::UnknownCommand),
         }
     }
 }

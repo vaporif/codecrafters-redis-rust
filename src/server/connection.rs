@@ -74,7 +74,16 @@ impl Actor {
 
     async fn handle_connection(&mut self) -> Result<ConnectionResult, TransportError> {
         while let Some(command) = self.stream.next().await {
-            let command = command?;
+            let command = match command {
+                Ok(command) => command,
+                Err(TransportError::UnknownCommand) => {
+                    self.stream
+                        .send(RedisMessage::Err("unknown command".to_string()))
+                        .await?;
+                    continue;
+                }
+                Err(e) => Err(e)?,
+            };
 
             trace!("command received {:?}", command);
 
@@ -157,10 +166,10 @@ impl Actor {
                             .await?
                     }
                 },
-                e => {
+                _ => {
                     self.stream
                         .send(RedisMessage::Err(
-                            format!("unknown command {:?}", e).to_string(),
+                            "command could not be processed".to_string(),
                         ))
                         .await?
                 }
@@ -192,6 +201,6 @@ pub fn spawn_actor(
             error!("connection failure {:?}", err);
         }
 
-        trace!("actor exited");
+        trace!("generic redis connection stopped");
     });
 }

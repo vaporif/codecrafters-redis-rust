@@ -2,8 +2,8 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum TransportError {
-    #[error("unknown command {0}")]
-    UnknownCommand(String),
+    #[error("unknown command")]
+    UnknownCommand,
     #[error("connection issue")]
     IoError(#[from] std::io::Error),
     #[error(transparent)]
