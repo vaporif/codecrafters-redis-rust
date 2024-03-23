@@ -182,7 +182,7 @@ impl Actor {
                         }
                     }
                 }
-                None => trace!("Empty Command"),
+                None => return Ok(ConnectionResult::Dropped),
             }
         }
     }
