@@ -13,7 +13,7 @@ fn init_tracing() {
         env::set_var("RUST_LOG", "trace")
     }
 
-    env::set_var("RUST_BACKTRACE", "full");
+    // env::set_var("RUST_BACKTRACE", "full");
 
     let subscriber = tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())

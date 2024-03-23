@@ -25,7 +25,7 @@ impl Decoder for RespCodec {
 
     type Error = TransportError;
 
-    #[instrument(skip_all)]
+    #[instrument]
     fn decode(
         &mut self,
         src: &mut bytes::BytesMut,
@@ -68,7 +68,10 @@ impl Decoder for RespCodec {
 
                     return Ok(None);
                 }
-                e => Err(anyhow!(e).into()),
+                e => {
+                    error!("failed to decode");
+                    return Err(anyhow!(e).into());
+                }
             },
         }
     }
