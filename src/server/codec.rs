@@ -40,6 +40,7 @@ impl Decoder for RespCodec {
         match message {
             Ok(message) => {
                 let final_position = buff_reader.into_inner().position();
+                trace!("ADVANCE {} pos", &final_position);
                 src.advance(final_position as usize);
                 let message =
                     RedisMessage::try_from(message).map_err(|_| TransportError::UnknownCommand)?;

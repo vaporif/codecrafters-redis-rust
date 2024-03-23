@@ -32,8 +32,9 @@ pub struct Actor {
     stream: RespStream,
 }
 
+#[allow(unused)]
 enum ConnectionResult {
-    EmptyResponse,
+    Dropped,
     SwitchToSlaveMode,
 }
 
@@ -68,115 +69,122 @@ impl Actor {
                     .context("sending add new slave")?;
                 Ok(())
             }
-            ConnectionResult::EmptyResponse => self.stream.close().await.context("closing stream"),
+            ConnectionResult::Dropped => self.stream.close().await.context("closing stream"),
         }
     }
 
     async fn handle_connection(&mut self) -> Result<ConnectionResult, TransportError> {
-        while let Some(command) = self.stream.next().await {
-            let command = match command {
-                Ok(command) => command,
-                Err(TransportError::UnknownCommand) => {
-                    self.stream
-                        .send(RedisMessage::Err("unknown command".to_string()))
-                        .await?;
-                    continue;
-                }
-                Err(e) => Err(e)?,
-            };
-
-            trace!("command received {:?}", command);
-
-            match command {
-                RedisMessage::Ping(_) => self.stream.send(RedisMessage::Pong).await?,
-                RedisMessage::Echo(echo_string) => {
-                    self.stream
-                        .send(RedisMessage::EchoResponse(echo_string))
-                        .await?
-                }
-                RedisMessage::Set(set_data) => {
-                    let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
-                    self.storage_hnd
-                        .send(storage::Message::Set(set_data, Some(reply_channel_tx)))
-                        .await
-                        .context("sending set store command")?;
-
-                    let message = match reply_channel_rx.await.context("waiting for reply for set")
-                    {
-                        Ok(_) => RedisMessage::Ok,
-                        Err(e) => RedisMessage::Err(format!("error {:?}", e)),
+        loop {
+            match self.stream.next().await {
+                Some(command) => {
+                    let command = match command {
+                        Ok(command) => command,
+                        Err(TransportError::UnknownCommand) => {
+                            self.stream
+                                .send(RedisMessage::Err("unknown command".to_string()))
+                                .await?;
+                            continue;
+                        }
+                        Err(e) => Err(e)?,
                     };
 
-                    self.stream.send(message).await?
-                }
-                RedisMessage::ReplConfCapa { .. } => self.stream.send(RedisMessage::Ok).await?,
-                RedisMessage::ReplConfPort { .. } => self.stream.send(RedisMessage::Ok).await?,
-                RedisMessage::Psync {
-                    replication_id,
-                    offset,
-                } => match (replication_id.as_str(), offset) {
-                    ("?", -1) => {
-                        let ServerMode::Master(MasterInfo {
-                            ref master_replid, ..
-                        }) = self.server_mode
-                        else {
-                            return Err(TransportError::Other(anyhow!(
-                                "server in slave mode".to_string()
-                            )));
-                        };
+                    trace!("command received {:?}", command);
 
-                        let resync_msq = RedisMessage::FullResync {
-                            replication_id: master_replid.clone(),
-                            offset: 0,
-                        };
+                    match command {
+                        RedisMessage::Ping(_) => self.stream.send(RedisMessage::Pong).await?,
+                        RedisMessage::Echo(echo_string) => {
+                            self.stream
+                                .send(RedisMessage::EchoResponse(echo_string))
+                                .await?
+                        }
+                        RedisMessage::Set(set_data) => {
+                            let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
+                            self.storage_hnd
+                                .send(storage::Message::Set(set_data, Some(reply_channel_tx)))
+                                .await
+                                .context("sending set store command")?;
 
-                        self.stream.send(resync_msq).await?;
+                            let message =
+                                match reply_channel_rx.await.context("waiting for reply for set") {
+                                    Ok(_) => RedisMessage::Ok,
+                                    Err(e) => RedisMessage::Err(format!("error {:?}", e)),
+                                };
 
-                        let db = Rdb::empty();
-                        let db = RedisMessage::DbTransfer(db.to_vec());
+                            self.stream.send(message).await?
+                        }
+                        RedisMessage::ReplConfCapa { .. } => {
+                            self.stream.send(RedisMessage::Ok).await?
+                        }
+                        RedisMessage::ReplConfPort { .. } => {
+                            self.stream.send(RedisMessage::Ok).await?
+                        }
+                        RedisMessage::Psync {
+                            replication_id,
+                            offset,
+                        } => match (replication_id.as_str(), offset) {
+                            ("?", -1) => {
+                                let ServerMode::Master(MasterInfo {
+                                    ref master_replid, ..
+                                }) = self.server_mode
+                                else {
+                                    return Err(TransportError::Other(anyhow!(
+                                        "server in slave mode".to_string()
+                                    )));
+                                };
 
-                        self.stream.send(db).await?;
+                                let resync_msq = RedisMessage::FullResync {
+                                    replication_id: master_replid.clone(),
+                                    offset: 0,
+                                };
 
-                        return Ok(ConnectionResult::SwitchToSlaveMode);
-                    }
-                    _ => todo!(),
-                },
-                RedisMessage::Get(key) => {
-                    let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
-                    self.storage_hnd
-                        .send(storage::Message::Get(key, reply_channel_tx))
-                        .await
-                        .context("sending set store command")?;
+                                self.stream.send(resync_msq).await?;
 
-                    let message = match reply_channel_rx.await.context("waiting for reply for get")
-                    {
-                        Ok(result) => match result {
-                            Some(value) => RedisMessage::CacheFound(value.into_bytes()),
-                            None => RedisMessage::CacheNotFound,
+                                let db = Rdb::empty();
+                                let db = RedisMessage::DbTransfer(db.to_vec());
+
+                                self.stream.send(db).await?;
+
+                                return Ok(ConnectionResult::SwitchToSlaveMode);
+                            }
+                            _ => todo!(),
                         },
-                        Err(e) => RedisMessage::Err(format!("error {:?}", e)),
-                    };
+                        RedisMessage::Get(key) => {
+                            let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
+                            self.storage_hnd
+                                .send(storage::Message::Get(key, reply_channel_tx))
+                                .await
+                                .context("sending set store command")?;
 
-                    self.stream.send(message).await?
-                }
-                RedisMessage::Info(info_data) => match info_data {
-                    InfoCommand::Replication => {
-                        self.stream
-                            .send(RedisMessage::InfoResponse(self.server_mode.clone()))
-                            .await?
+                            let message =
+                                match reply_channel_rx.await.context("waiting for reply for get") {
+                                    Ok(result) => match result {
+                                        Some(value) => RedisMessage::CacheFound(value.into_bytes()),
+                                        None => RedisMessage::CacheNotFound,
+                                    },
+                                    Err(e) => RedisMessage::Err(format!("error {:?}", e)),
+                                };
+
+                            self.stream.send(message).await?
+                        }
+                        RedisMessage::Info(info_data) => match info_data {
+                            InfoCommand::Replication => {
+                                self.stream
+                                    .send(RedisMessage::InfoResponse(self.server_mode.clone()))
+                                    .await?
+                            }
+                        },
+                        _ => {
+                            self.stream
+                                .send(RedisMessage::Err(
+                                    "command could not be processed".to_string(),
+                                ))
+                                .await?
+                        }
                     }
-                },
-                _ => {
-                    self.stream
-                        .send(RedisMessage::Err(
-                            "command could not be processed".to_string(),
-                        ))
-                        .await?
                 }
+                None => trace!("Empty Command"),
             }
         }
-
-        Ok(ConnectionResult::EmptyResponse)
     }
 }
 
