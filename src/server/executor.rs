@@ -41,7 +41,7 @@ pub async fn spawn_actor_executor(
     replication_ip: Option<MasterAddr>,
     port: u16,
     max_connections: usize,
-) -> (ExecutorMessenger, JoinHandle<()>) {
+) -> (ExecutorMessenger, JoinHandle<anyhow::Result<()>>) {
     let (connection_sender, connection_receiver) = tokio::sync::mpsc::channel(max_connections);
     let (internal_sender, internal_receiver) = tokio::sync::mpsc::channel(max_connections);
 
@@ -64,13 +64,11 @@ pub async fn spawn_actor_executor(
         .await;
 
         match executor {
-            Ok(executor) => {
-                if let Err(err) = executor.run().await {
-                    error!("executor crash {:?}", err)
-                }
-            }
-            Err(err) => error!("executor crash {:?}", err),
+            Ok(executor) => executor.run().await?,
+            Err(err) => Err(err)?,
         }
+
+        Ok(())
     });
 
     (resp_executor_messenger, join_handle)
@@ -79,7 +77,25 @@ pub async fn spawn_actor_executor(
 #[derive(Clone)]
 pub struct ExecutorMessenger {
     pub connection_sender: tokio::sync::mpsc::Sender<ConnectionMessage>,
-    pub internal_sender: tokio::sync::mpsc::Sender<Message>,
+    internal_sender: tokio::sync::mpsc::Sender<Message>,
+}
+
+impl ExecutorMessenger {
+    pub async fn propagate_fatal_errors<T>(&self, result: anyhow::Result<T>) {
+        if let Err(error) = result {
+            self.internal_sender
+                .send(Message::FatalError(error))
+                .await
+                .expect("should send error")
+        }
+    }
+
+    pub async fn publish_msg(&self, msg: Message) -> anyhow::Result<()> {
+        self.internal_sender
+            .send(msg)
+            .await
+            .context("could not send forwarding req")
+    }
 }
 
 #[allow(unused)]
@@ -162,7 +178,7 @@ impl Executor {
                                 tracing::trace!("No replicas to update");
                             };
                         },
-                        Message::FatalError(error) => bail!(format!("fatal error {:?}", error))
+                        Message::FatalError(error) => Err(error)?
                     }
                 }
             }

@@ -8,20 +8,29 @@ use super::commands::*;
 pub type GetReplyChannel = oneshot::Sender<Option<String>>;
 pub type SetReplyChannel = oneshot::Sender<Result<()>>;
 
-#[derive(Debug)]
+#[derive(DebugExtras)]
 pub enum Message {
-    Get(String, GetReplyChannel),
-    Set(SetData, Option<SetReplyChannel>),
+    Get {
+        #[debug_as_display]
+        key: String,
+        #[debug_ignore]
+        channel: GetReplyChannel,
+    },
+    Set {
+        data: SetData,
+        #[debug_ignore]
+        channel: Option<SetReplyChannel>,
+    },
 }
 // TODO: Add sharding & active expiration
-pub struct Actor {
+pub struct StorageActor {
     data: HashMap<String, String>,
     expire_info: HashMap<String, Instant>,
     executor_messenger: ExecutorMessenger,
     receive_channel: tokio::sync::mpsc::UnboundedReceiver<Message>,
 }
 
-impl Actor {
+impl StorageActor {
     pub fn new(
         executor_messenger: ExecutorMessenger,
         receive_channel: tokio::sync::mpsc::UnboundedReceiver<Message>,
@@ -40,12 +49,8 @@ impl Actor {
         while let Some(command) = self.receive_channel.recv().await {
             trace!("new command received {:?}", &command);
             let command_result = match command {
-                Message::Get(key, reply_channel_tx) => {
-                    self.process_get_command(key, reply_channel_tx)
-                }
-                Message::Set(set_data, reply_channel_tx) => {
-                    self.process_set_command(set_data, reply_channel_tx).await
-                }
+                Message::Get { key, channel } => self.process_get_command(key, channel),
+                Message::Set { data, channel } => self.process_set_command(data, channel).await,
             };
 
             if let Err(e) = command_result {
@@ -79,15 +84,15 @@ impl Actor {
     #[instrument(skip(self, reply_channel_tx))]
     async fn process_set_command(
         &mut self,
-        set_data: SetData,
+        data: SetData,
         reply_channel_tx: Option<SetReplyChannel>,
     ) -> anyhow::Result<()> {
-        let set_msg = set_data.clone();
+        let set_msg = data.clone();
         let SetData {
             key,
             value,
             arguments,
-        } = set_data;
+        } = data;
 
         if let Some(ttl) = arguments.ttl {
             let expires_at = Instant::now() + ttl;
@@ -102,8 +107,7 @@ impl Actor {
             .or_insert(value);
 
         self.executor_messenger
-            .internal_sender
-            .send(super::executor::Message::ForwardSetToReplica(set_msg))
+            .publish_msg(super::executor::Message::ForwardSetToReplica(set_msg))
             .await
             .context("could not send forwarding req")?;
 
@@ -126,7 +130,7 @@ impl ActorHandle {
     pub fn new(executor_messenger: ExecutorMessenger) -> Self {
         let (sender, receive) = tokio::sync::mpsc::unbounded_channel();
 
-        let mut actor = Actor::new(executor_messenger, receive);
+        let mut actor = StorageActor::new(executor_messenger, receive);
         tokio::spawn(async move {
             actor.run().await;
         });

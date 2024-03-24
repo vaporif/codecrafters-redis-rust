@@ -54,7 +54,11 @@ async fn main() -> anyhow::Result<()> {
         tracing::trace!("tcp loop started");
     });
 
-    join_handle.await.context("waiting on actor executor")?;
+    if let Err(err) = join_handle.await.context("waiting on actor executor") {
+        tracing::error!("fatal crash {:?}", err);
+
+        Err(err)?;
+    }
 
     Ok(())
 }

@@ -18,7 +18,7 @@ use crate::prelude::*;
 
 pub struct RespCodec;
 
-pub type RespStream = Framed<tokio::net::TcpStream, RespCodec>;
+pub type RespTcpStream = Framed<tokio::net::TcpStream, RespCodec>;
 
 impl Decoder for RespCodec {
     type Item = RedisMessage;
@@ -40,7 +40,10 @@ impl Decoder for RespCodec {
         match message {
             Ok(message) => {
                 let resp = RESP::from(message.clone());
-                let len_read = ser::to_string(&resp).expect("would not fail").bytes().len();
+                let len_read = ser::to_string(&resp)
+                    .context("would not fail")?
+                    .bytes()
+                    .len();
                 trace!("ADVANCE {} pos", &len_read);
                 src.advance(len_read);
                 trace!("left bytes {:?}", &src);
@@ -71,7 +74,6 @@ impl Decoder for RespCodec {
                     return Ok(None);
                 }
                 e => {
-                    error!("failed to decode");
                     return Err(anyhow!(e).into());
                 }
             },

@@ -8,7 +8,7 @@ use tokio::sync::oneshot;
 
 use super::{
     cluster,
-    codec::{RespCodec, RespStream},
+    codec::{RespCodec, RespTcpStream},
     commands::*,
     error::TransportError,
     executor::{MasterInfo, ServerMode},
@@ -18,7 +18,7 @@ use crate::{prelude::*, server::rdb::Rdb, ExecutorMessenger};
 
 #[allow(unused)]
 #[derive(DebugExtras)]
-pub struct Actor {
+pub struct ConnectionActor {
     #[debug_ignore]
     executor_messenger: ExecutorMessenger,
     #[debug_ignore]
@@ -29,7 +29,7 @@ pub struct Actor {
     server_mode: ServerMode,
     socket: SocketAddr,
     #[debug_ignore]
-    stream: RespStream,
+    stream: RespTcpStream,
 }
 
 #[allow(unused)]
@@ -38,7 +38,7 @@ enum ConnectionResult {
     SwitchToSlaveMode,
 }
 
-impl Actor {
+impl ConnectionActor {
     pub fn new(
         executor_messenger: ExecutorMessenger,
         storage_hnd: storage::ActorHandle,
@@ -97,10 +97,13 @@ impl Actor {
                                 .send(RedisMessage::EchoResponse(echo_string))
                                 .await?
                         }
-                        RedisMessage::Set(set_data) => {
+                        RedisMessage::Set(data) => {
                             let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
                             self.storage_hnd
-                                .send(storage::Message::Set(set_data, Some(reply_channel_tx)))
+                                .send(storage::Message::Set {
+                                    data,
+                                    channel: Some(reply_channel_tx),
+                                })
                                 .await
                                 .context("sending set store command")?;
 
@@ -151,7 +154,10 @@ impl Actor {
                         RedisMessage::Get(key) => {
                             let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
                             self.storage_hnd
-                                .send(storage::Message::Get(key, reply_channel_tx))
+                                .send(storage::Message::Get {
+                                    key,
+                                    channel: reply_channel_tx,
+                                })
                                 .await
                                 .context("sending set store command")?;
 
@@ -197,7 +203,7 @@ pub fn spawn_actor(
     server_mode: ServerMode,
 ) {
     tokio::spawn(async move {
-        let actor = super::connection::Actor::new(
+        let actor = super::connection::ConnectionActor::new(
             executor_messenger,
             storage_hnd,
             cluster_hnd,

@@ -5,7 +5,7 @@ use futures::SinkExt;
 use crate::prelude::*;
 
 use super::{
-    codec::RespStream,
+    codec::RespTcpStream,
     commands::{RedisMessage, SetData},
 };
 
@@ -17,43 +17,45 @@ pub enum Message {
 
 #[allow(unused)]
 #[derive(DebugExtras)]
-struct Actor {
+struct SlaveConnectionActor {
     socket: SocketAddr,
     #[debug_ignore]
-    slave_stream: RespStream,
+    stream: RespTcpStream,
     #[debug_ignore]
     receive: tokio::sync::broadcast::Receiver<Message>,
 }
 
-impl Actor {
+impl SlaveConnectionActor {
     async fn new(
         socket: SocketAddr,
-        slave_stream: RespStream,
+        stream: RespTcpStream,
         receive: tokio::sync::broadcast::Receiver<Message>,
     ) -> anyhow::Result<Self> {
         Ok(Self {
             socket,
-            slave_stream,
+            stream,
             receive,
         })
     }
 
     #[instrument]
-    async fn run(&mut self) {
+    async fn run(&mut self) -> anyhow::Result<()> {
         trace!("switched to slave mode");
         while let Ok(message) = self.receive.recv().await {
             trace!("received {:?}", message);
             match message {
                 Message::Set(set_data) => {
-                    self.slave_stream
+                    self.stream
                         .send(RedisMessage::Set(set_data))
                         .await
-                        .expect("sent set to slave");
+                        .context("sent set to slave")?;
                 }
             }
 
             trace!("slave processed messages");
         }
+
+        Ok(())
     }
 }
 
@@ -71,12 +73,11 @@ impl ActorHandle {
     pub async fn start_slave(
         &self,
         socket: SocketAddr,
-        slave_stream: RespStream,
+        slave_stream: RespTcpStream,
     ) -> anyhow::Result<()> {
-        let mut actor = Actor::new(socket, slave_stream, self.broadcast.subscribe()).await?;
-        tokio::spawn(async move {
-            actor.run().await;
-        });
+        let mut actor =
+            SlaveConnectionActor::new(socket, slave_stream, self.broadcast.subscribe()).await?;
+        tokio::spawn(async move { actor.run().await });
 
         Ok(())
     }

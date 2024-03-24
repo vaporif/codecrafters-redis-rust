@@ -5,18 +5,18 @@ use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
 use super::{
-    codec::{RespCodec, RespStream},
+    codec::{RespCodec, RespTcpStream},
     commands::RedisMessage,
     error::TransportError,
-    executor, storage,
+    storage,
 };
 
-pub struct Actor {
-    master_stream: RespStream,
+pub struct ReplicationActor {
+    master_stream: RespTcpStream,
     storage_hnd: storage::ActorHandle,
 }
 
-impl Actor {
+impl ReplicationActor {
     pub async fn new(master_stream: TcpStream, storage_hnd: storage::ActorHandle) -> Self {
         let stream = Framed::new(master_stream, RespCodec);
         Self {
@@ -103,7 +103,12 @@ impl Actor {
 
         trace!("connected to master");
 
-        self.handle_master_connection().await?;
+        if let Err(error) = self.handle_master_connection().await {
+            self.master_stream
+                .send(RedisMessage::Err(format!("{:?}", error)))
+                .await?;
+            Err(error)?;
+        }
 
         Ok(())
     }
@@ -112,9 +117,12 @@ impl Actor {
         while let Some(command) = self.master_stream.next().await {
             let command = command.context("reading master connection")?;
             match command {
-                RedisMessage::Set(set_data) => {
+                RedisMessage::Set(data) => {
                     self.storage_hnd
-                        .send(storage::Message::Set(set_data, None))
+                        .send(storage::Message::Set {
+                            data,
+                            channel: None,
+                        })
                         .await
                         .context("sending set command")?;
                 }
@@ -144,13 +152,10 @@ pub fn spawn_actor(
         let master_stream = tokio::net::TcpStream::connect(master_addr)
             .await
             .expect("failed to connect to master");
-        let actor = super::replication::Actor::new(master_stream, storage_hnd).await;
-        if let Err(err) = actor.run(port).await.context("failed to replicate") {
-            executor_messenger
-                .internal_sender
-                .send(executor::Message::FatalError(err))
-                .await
-                .expect("error notified")
-        }
+        let actor = super::replication::ReplicationActor::new(master_stream, storage_hnd).await;
+
+        executor_messenger
+            .propagate_fatal_errors(actor.run(port).await.context("failed to replicate"))
+            .await;
     });
 }

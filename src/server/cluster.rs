@@ -2,13 +2,13 @@ use std::net::SocketAddr;
 
 pub use crate::prelude::*;
 
-use super::{codec::RespStream, commands::SetData};
+use super::{codec::RespTcpStream, commands::SetData};
 
 pub type MasterAddr = (String, u16);
 #[derive(Debug)]
 #[allow(unused)]
 pub enum Message {
-    AddNewSlave((SocketAddr, RespStream)),
+    AddNewSlave((SocketAddr, RespTcpStream)),
     Set(SetData),
 }
 
