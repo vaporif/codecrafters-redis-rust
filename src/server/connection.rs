@@ -118,17 +118,22 @@ impl ConnectionActor {
                             replica_count: requested_replicas,
                             timeout,
                         } => {
+                            let start_instant = tokio::time::Instant::now();
+                            let interval_duration = tokio::time::Duration::from_millis(50);
                             let mut interval =
-                                tokio::time::interval(tokio::time::Duration::from_millis(50));
+                                tokio::time::interval_at(start_instant, interval_duration);
+                            tokio::pin! {
+                                let timeout =
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(timeout));
+                            }
                             loop {
+                                let replica_count = self.get_replica_count().await?;
                                 tokio::select! {
-                                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(timeout)) => {
-                                        let replica_count =  self.get_replica_count().await?;
+                                    _ = &mut timeout => {
                                         self.stream.send(RedisMessage::WaitReply { replica_count}).await?;
                                         break;
                                     }
                                     _ = interval.tick() => {
-                                        let replica_count = self.get_replica_count().await?;
                                         if replica_count >= requested_replicas {
                                             self.stream.send(RedisMessage::WaitReply { replica_count }).await?;
                                             break;
