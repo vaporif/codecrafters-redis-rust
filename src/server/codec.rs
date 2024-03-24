@@ -39,9 +39,11 @@ impl Decoder for RespCodec {
         let message: serde_resp::Result<RESP> = de::from_buf_reader(&mut buff_reader);
         match message {
             Ok(message) => {
-                let final_position = buff_reader.into_inner().position();
-                trace!("ADVANCE {} pos", &final_position);
-                src.advance(final_position as usize);
+                let resp = RESP::from(message.clone());
+                let len_read = ser::to_string(&resp).expect("would not fail").bytes().len();
+                trace!("ADVANCE {} pos", &len_read);
+                src.advance(len_read);
+                trace!("left bytes {:?}", &src);
                 let message =
                     RedisMessage::try_from(message).map_err(|_| TransportError::UnknownCommand)?;
 
