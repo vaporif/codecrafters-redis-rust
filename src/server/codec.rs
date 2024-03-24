@@ -8,6 +8,7 @@ use serde_resp::{array, bulk, bulk_null, de, err_str, ser, simple, RESP};
 use std::{
     io::{BufReader, Cursor},
     time::Duration,
+    usize,
 };
 use tokio_util::codec::{Decoder, Encoder, Framed};
 
@@ -36,6 +37,7 @@ impl Decoder for RespCodec {
 
         let cursor = Cursor::new(src.clone().freeze());
         let mut buff_reader = BufReader::new(cursor);
+        trace!("attempting decode");
         let message: serde_resp::Result<RESP> = de::from_buf_reader(&mut buff_reader);
         match message {
             Ok(message) => {
@@ -45,6 +47,11 @@ impl Decoder for RespCodec {
                     .bytes()
                     .len();
                 trace!("ADVANCE {} pos", &len_read);
+
+                if src.len() < len_read {
+                    Err(anyhow!("WTF1???"))?;
+                }
+
                 src.advance(len_read);
                 trace!("left bytes {:?}", &src);
                 let message =
@@ -54,30 +61,77 @@ impl Decoder for RespCodec {
                 Ok(Some(message))
             }
             Err(error) => match error {
-                serde_resp::Error::Eof => {
-                    // NOTE: Ughhh, since db transfer is not correct bulk string
-                    // since it doesn't have \r\n lets try to add them
-                    // and parse as bulk string
-                    let mut bytes = src.clone();
-                    let bytes_len = bytes.len();
-                    bytes.extend("\r\n".bytes());
-                    let cursor = Cursor::new(bytes.freeze());
-                    let mut buff_reader = BufReader::new(cursor);
-                    let parsed: serde_resp::Result<RESP> = de::from_buf_reader(&mut buff_reader);
-
-                    if let Ok(RESP::BulkString(Some(data))) = parsed {
-                        src.advance(bytes_len);
-
-                        return Ok(Some(RedisMessage::DbTransfer(data)));
-                    }
-
-                    return Ok(None);
-                }
-                e => {
-                    return Err(anyhow!(e).into());
-                }
+                serde_resp::Error::Eof => Ok(try_get_db_redis_msg(src)?),
+                serde_resp::Error::Syntax => Ok(try_get_db_redis_msg(src)?),
+                e => Err(anyhow!(e).into()),
             },
         }
+    }
+}
+
+// DB redis message is not correct resp string, enjoy manual binary parse
+#[instrument(skip_all)]
+fn try_get_db_redis_msg(src: &mut bytes::BytesMut) -> Result<Option<RedisMessage>> {
+    trace!("attempting db decode");
+    if b'$' != src.get_u8() {
+        Err(serde_resp::Error::Syntax)?
+    }
+
+    let db_len = match get_resp_int(src) {
+        Ok(Some(db_len)) => {
+            trace!("got number {db_len:?}");
+            if src.len() < 2 {
+                return Ok(None);
+            }
+
+            let mut crlf = [0; 2];
+            src.copy_to_slice(&mut crlf);
+            if crlf[0] != b'\r' || crlf[1] != b'\n' {
+                Err(anyhow!("no crf in probable db response after numbers"))?
+            }
+            db_len
+        }
+        Ok(None) => return Ok(None),
+        Err(err) => {
+            return Err(anyhow!(
+                "failed to parse number in probable db response {err:?}"
+            ))?
+        }
+    };
+
+    if src.len() < db_len {
+        return Ok(None);
+    }
+
+    let db = src.split_to(db_len);
+    let db_msg = RedisMessage::DbTransfer(db.to_vec());
+
+    trace!("parsed as {db_msg:?}");
+    return Ok(Some(db_msg));
+
+    fn get_resp_int(src: &mut bytes::BytesMut) -> Result<Option<usize>> {
+        let mut int_vec = Vec::new();
+
+        for byte in src.iter() {
+            if *byte == b'\r' {
+                let len = int_vec.len();
+
+                let integer = String::from_utf8(int_vec)
+                    .context("utf8 expected as char for int")?
+                    .parse::<usize>()
+                    .context("failed to parse")?;
+                if src.len() < len {
+                    bail!("WTF2???");
+                }
+                src.advance(len);
+                return Ok(Some(integer));
+            }
+
+            int_vec.push(*byte);
+        }
+
+        trace!("no crlf in number search");
+        Ok(None)
     }
 }
 

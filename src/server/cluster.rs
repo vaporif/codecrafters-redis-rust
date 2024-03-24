@@ -40,6 +40,7 @@ impl Actor {
                     }
                 }
                 Message::Set(set_data) => {
+                    trace!("sending to slaves");
                     _ = self
                         .slave_handler
                         .send(super::slave::Message::Set(set_data))

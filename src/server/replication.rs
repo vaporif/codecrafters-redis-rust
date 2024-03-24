@@ -1,4 +1,4 @@
-use crate::{prelude::*, ExecutorMessenger, MasterAddr};
+use crate::{prelude::*, MasterAddr};
 use anyhow::Context;
 use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
@@ -96,9 +96,11 @@ impl ReplicationActor {
             Some(Ok(RedisMessage::DbTransfer(_))) => {
                 info!("db received");
             }
-            _ => {
+            None => {
                 info!("db not sent back");
             }
+            Some(Err(error)) => Err(error)?,
+            _ => bail!("incorrect response"),
         }
 
         trace!("connected to master");
@@ -117,7 +119,7 @@ impl ReplicationActor {
     async fn handle_master_connection(&mut self) -> anyhow::Result<(), TransportError> {
         while let Some(command) = self.master_stream.next().await {
             let command = command.context("reading master connection")?;
-            trace!("--- received command from master {:?}", &command);
+            trace!("received command from master {:?}", &command);
             match command {
                 RedisMessage::Set(data) => {
                     self.storage_hnd
@@ -142,22 +144,17 @@ impl ReplicationActor {
     }
 }
 
+// TODO: needs supervisor task
 #[allow(unused)]
 pub fn spawn_actor(
     master_addr: MasterAddr,
     storage_hnd: storage::ActorHandle,
-    executor_messenger: ExecutorMessenger,
     port: u16,
     on_complete_tx: tokio::sync::oneshot::Sender<TcpStream>,
-) {
+) -> tokio::task::JoinHandle<anyhow::Result<()>> {
     tokio::spawn(async move {
-        let master_stream = tokio::net::TcpStream::connect(master_addr)
-            .await
-            .expect("failed to connect to master");
-        let actor = super::replication::ReplicationActor::new(master_stream, storage_hnd).await;
-
-        executor_messenger
-            .propagate_fatal_errors(actor.run(port).await.context("failed to replicate"))
-            .await;
-    });
+        let stream = tokio::net::TcpStream::connect(master_addr).await?;
+        let actor = super::replication::ReplicationActor::new(stream, storage_hnd).await;
+        actor.run(port).await
+    })
 }

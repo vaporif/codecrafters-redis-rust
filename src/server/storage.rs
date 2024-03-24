@@ -117,6 +117,8 @@ impl StorageActor {
                 .map_err(|_| anyhow::Error::msg(format!("could not send result for set {key}")))?
         }
 
+        trace!("set done");
+
         Ok(())
     }
 }

@@ -183,7 +183,7 @@ impl Executor {
                     match message {
                         Message::ReplicateMaster { ref socket, channel } => {
                             let master_addr = socket.clone();
-                            super::replication::spawn_actor(master_addr, self.storage_hnd.clone(), self.executor_messenger.clone(), self.port, channel);
+                            super::replication::spawn_actor(master_addr, self.storage_hnd.clone(), self.port, channel);
                         },
                         // TODO: Buffer
                         Message::ForwardSetToReplica(set_data) => {
