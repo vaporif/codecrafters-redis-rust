@@ -144,7 +144,6 @@ impl ReplicationActor {
     }
 }
 
-// TODO: needs supervisor task
 #[allow(unused)]
 pub fn spawn_actor(
     master_addr: MasterAddr,
@@ -153,6 +152,12 @@ pub fn spawn_actor(
     on_complete_tx: tokio::sync::oneshot::Sender<TcpStream>,
 ) -> tokio::task::JoinHandle<anyhow::Result<()>> {
     tokio::spawn(async move {
+        let default_panic = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            error!("replication crashed {info:?}");
+            std::process::exit(1);
+        }));
+
         let stream = tokio::net::TcpStream::connect(master_addr).await?;
         let actor = super::replication::ReplicationActor::new(stream, storage_hnd).await;
         actor.run(port).await
