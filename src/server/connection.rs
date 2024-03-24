@@ -140,9 +140,9 @@ impl Actor {
                                 self.stream.send(resync_msq).await?;
 
                                 let db = Rdb::empty();
-                                let db = RedisMessage::DbTransfer(db.to_vec());
+                                let db_message = RedisMessage::DbTransfer(db.to_vec());
 
-                                self.stream.send(db).await?;
+                                self.stream.send(db_message).await?;
 
                                 return Ok(ConnectionResult::SwitchToSlaveMode);
                             }

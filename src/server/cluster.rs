@@ -34,7 +34,7 @@ impl Actor {
         while let Some(message) = self.receiver.recv().await {
             trace!("new message {:?}", &message);
             match message {
-                Message::AddNewSlave((socket, stream)) => {
+                Message::AddNewSlave((socket, mut stream)) => {
                     if let Err(error) = self.slave_handler.start_slave(socket, stream).await {
                         error!("failed to connect {:?}", error);
                     }

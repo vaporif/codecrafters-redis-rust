@@ -118,6 +118,12 @@ impl Actor {
                         .await
                         .context("sending set command")?;
                 }
+                RedisMessage::ReplConfGetAck => {
+                    self.master_stream
+                        .send(RedisMessage::ReplConfAck { offset: 0 })
+                        .await
+                        .context("sending replconf")?;
+                }
                 s => Err(anyhow!("unsupported command {:?}", s))?,
             }
         }

@@ -274,6 +274,30 @@ impl RedisMessage {
 
                         Ok(RedisMessage::ReplConfCapa { capa })
                     }
+                    "GETACK" => {
+                        let offset = array_command
+                            .args
+                            .get(1)
+                            .context("replconf get ack offset")?
+                            .to_string();
+
+                        if offset != "*" {
+                            Err(anyhow::anyhow!("should have * as offset"))?
+                        }
+
+                        Ok(RedisMessage::ReplConfGetAck)
+                    }
+                    "ACK" => {
+                        let offset = array_command
+                            .args
+                            .get(1)
+                            .context("replconf ack offset")?
+                            .to_string();
+
+                        let offset = offset.parse().context("parse offset")?;
+
+                        Ok(RedisMessage::ReplConfAck { offset })
+                    }
                     s => Err(anyhow::anyhow!("unknown replconf {:?}", s))?,
                 }
             }
@@ -349,6 +373,20 @@ impl From<RedisMessage> for RESP {
             RedisMessage::InfoResponse(server_mode) => server_mode.to_resp(),
             RedisMessage::DbTransfer(_) => {
                 panic!("db transfer is not proper resp messag")
+            }
+            RedisMessage::ReplConfGetAck => {
+                array![
+                    bulk!(b"REPLCONF".to_vec()),
+                    bulk!(b"GETACK".to_vec()),
+                    bulk!(b"*".to_vec())
+                ]
+            }
+            RedisMessage::ReplConfAck { offset } => {
+                array![
+                    bulk!(b"REPLCONF".to_vec()),
+                    bulk!(b"ACK".to_vec()),
+                    bulk!(offset.to_string().bytes().collect_vec())
+                ]
             }
         }
     }

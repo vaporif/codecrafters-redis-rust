@@ -32,6 +32,8 @@ pub enum RedisMessage {
     DbTransfer(#[debug_ignore] Vec<u8>),
     ReplConfPort { port: u16 },
     ReplConfCapa { capa: String },
+    ReplConfGetAck,
+    ReplConfAck { offset: u32 },
     Info(InfoCommand),
     CacheFound(Vec<u8>),
     CacheNotFound,
