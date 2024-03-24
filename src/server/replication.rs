@@ -113,9 +113,11 @@ impl ReplicationActor {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn handle_master_connection(&mut self) -> anyhow::Result<(), TransportError> {
         while let Some(command) = self.master_stream.next().await {
             let command = command.context("reading master connection")?;
+            trace!("--- received command from master {:?}", &command);
             match command {
                 RedisMessage::Set(data) => {
                     self.storage_hnd

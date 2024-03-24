@@ -126,7 +126,10 @@ impl Executor {
 
             executor_messenger
                 .internal_sender
-                .send(Message::ReplicateMaster((master_addr.clone(), db_done_tx)))
+                .send(Message::ReplicateMaster {
+                    socket: master_addr.clone(),
+                    channel: db_done_tx,
+                })
                 .await
                 .context("replicate from master")?;
 
@@ -168,9 +171,9 @@ impl Executor {
              Some(message) = self.internal_receiver.recv() => {
                     trace!("executor message received {:?}", &message);
                     match message {
-                        Message::ReplicateMaster((ref master_addr, sender)) => {
-                            let master_addr = master_addr.clone();
-                            super::replication::spawn_actor(master_addr, self.storage_hnd.clone(), self.executor_messenger.clone(), self.port, sender);
+                        Message::ReplicateMaster { ref socket, channel } => {
+                            let master_addr = socket.clone();
+                            super::replication::spawn_actor(master_addr, self.storage_hnd.clone(), self.executor_messenger.clone(), self.port, channel);
                         },
                         // TODO: Buffer
                         Message::ForwardSetToReplica(set_data) => {
@@ -192,9 +195,13 @@ pub enum ConnectionMessage {
     FatalError(std::io::Error),
 }
 
-#[derive(Debug)]
+#[derive(DebugExtras)]
 pub enum Message {
-    ReplicateMaster((MasterAddr, tokio::sync::oneshot::Sender<TcpStream>)),
+    ReplicateMaster {
+        socket: MasterAddr,
+        #[debug_ignore]
+        channel: tokio::sync::oneshot::Sender<TcpStream>,
+    },
     ForwardSetToReplica(SetData),
     FatalError(anyhow::Error),
 }

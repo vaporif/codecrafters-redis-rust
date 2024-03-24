@@ -70,11 +70,7 @@ impl ActorHandle {
         Self { broadcast }
     }
 
-    pub async fn start_slave(
-        &self,
-        socket: SocketAddr,
-        slave_stream: RespTcpStream,
-    ) -> anyhow::Result<()> {
+    pub async fn run(&self, socket: SocketAddr, slave_stream: RespTcpStream) -> anyhow::Result<()> {
         let mut actor =
             SlaveConnectionActor::new(socket, slave_stream, self.broadcast.subscribe()).await?;
         tokio::spawn(async move { actor.run().await });
