@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{time::Duration, usize};
 
 use derive_debug_extras::DebugExtras;
 
@@ -17,7 +17,7 @@ pub struct SetArguments {
 }
 
 #[allow(unused)]
-#[derive(DebugExtras)]
+#[derive(DebugExtras, Clone)]
 pub enum RedisMessage {
     Ping(Option<String>),
     Pong,
@@ -33,14 +33,14 @@ pub enum RedisMessage {
     ReplConfPort { port: u16 },
     ReplConfCapa { capa: String },
     ReplConfGetAck,
-    ReplConfAck { offset: u32 },
+    ReplConfAck { offset: usize },
     Info(InfoCommand),
     CacheFound(Vec<u8>),
     CacheNotFound,
     InfoResponse(ServerMode),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum InfoCommand {
     Replication,
 }

@@ -1,6 +1,7 @@
 use crate::{prelude::*, MasterAddr};
 use anyhow::Context;
 use futures::{SinkExt, StreamExt};
+use serde_resp::RESP;
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
@@ -12,25 +13,27 @@ use super::{
 };
 
 pub struct ReplicationActor {
-    master_stream: RespTcpStream,
+    offset: usize,
+    stream: RespTcpStream,
     storage_hnd: storage::ActorHandle,
 }
 
 impl ReplicationActor {
-    pub async fn new(master_stream: TcpStream, storage_hnd: storage::ActorHandle) -> Self {
-        let stream = Framed::new(master_stream, RespCodec);
+    pub async fn new(stream: TcpStream, storage_hnd: storage::ActorHandle) -> Self {
+        let stream = Framed::new(stream, RespCodec);
         Self {
+            offset: 0,
             storage_hnd,
-            master_stream: stream,
+            stream,
         }
     }
 
     #[instrument(skip(self))]
     pub async fn run(mut self, port: u16) -> anyhow::Result<()> {
-        self.master_stream.send(RedisMessage::Ping(None)).await?;
+        self.stream.send(RedisMessage::Ping(None)).await?;
 
         let RedisMessage::Pong = self
-            .master_stream
+            .stream
             .next()
             .await
             .context("expecting repl pong response")?
@@ -39,12 +42,12 @@ impl ReplicationActor {
             bail!("expecting pong reply")
         };
 
-        self.master_stream
+        self.stream
             .send(RedisMessage::ReplConfPort { port })
             .await?;
 
         let RedisMessage::Ok = self
-            .master_stream
+            .stream
             .next()
             .await
             .context("expecting repl ok response")?
@@ -53,7 +56,7 @@ impl ReplicationActor {
             bail!("expecting ok reply")
         };
 
-        self.master_stream
+        self.stream
             .send(RedisMessage::ReplConfCapa {
                 capa: "psync2".to_string(),
             })
@@ -61,7 +64,7 @@ impl ReplicationActor {
             .context("expecting send replconf")?;
 
         let RedisMessage::Ok = self
-            .master_stream
+            .stream
             .next()
             .await
             .context("expecting repl response")?
@@ -70,7 +73,7 @@ impl ReplicationActor {
             bail!("expecting ok reply")
         };
 
-        self.master_stream
+        self.stream
             .send(RedisMessage::Psync {
                 replication_id: "?".to_string(),
                 offset: -1,
@@ -81,7 +84,7 @@ impl ReplicationActor {
             replication_id: _,
             offset: _,
         } = self
-            .master_stream
+            .stream
             .next()
             .await
             .context("expecting repl fullserync response")?
@@ -90,7 +93,7 @@ impl ReplicationActor {
             bail!("expecting fullresync reply")
         };
 
-        let expected_db = self.master_stream.next().await;
+        let expected_db = self.stream.next().await;
 
         match expected_db {
             Some(Ok(RedisMessage::DbTransfer(_))) => {
@@ -106,7 +109,7 @@ impl ReplicationActor {
         trace!("connected to master");
 
         if let Err(error) = self.handle_master_connection().await {
-            self.master_stream
+            self.stream
                 .send(RedisMessage::Err(format!("{:?}", error)))
                 .await?;
             Err(error)?;
@@ -117,8 +120,13 @@ impl ReplicationActor {
 
     #[instrument(skip_all)]
     async fn handle_master_connection(&mut self) -> anyhow::Result<(), TransportError> {
-        while let Some(command) = self.master_stream.next().await {
+        while let Some(command) = self.stream.next().await {
             let command = command.context("reading master connection")?;
+
+            let offset = serde_resp::ser::to_string(&RESP::from(command.clone()))
+                .context("serialize")?
+                .bytes()
+                .len();
             trace!("received command from master {:?}", &command);
             match command {
                 RedisMessage::Set(data) => {
@@ -131,13 +139,17 @@ impl ReplicationActor {
                         .context("sending set command")?;
                 }
                 RedisMessage::ReplConfGetAck => {
-                    self.master_stream
-                        .send(RedisMessage::ReplConfAck { offset: 0 })
+                    self.stream
+                        .send(RedisMessage::ReplConfAck {
+                            offset: self.offset,
+                        })
                         .await
                         .context("sending replconf")?;
                 }
-                s => Err(anyhow!("unsupported command {:?}", s))?,
+                _ => {}
             }
+
+            self.offset += offset;
         }
 
         Ok(())
