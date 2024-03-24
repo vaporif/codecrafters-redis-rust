@@ -73,6 +73,22 @@ impl ConnectionActor {
         }
     }
 
+    async fn get_replica_count(&mut self) -> anyhow::Result<u64> {
+        let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
+        self.cluster_hnd
+            .send(cluster::Message::GetSlaveCount {
+                channel: reply_channel_tx,
+            })
+            .await
+            .context("get slave count")?;
+
+        let count = reply_channel_rx
+            .await
+            .context("waiting for reply for wait")?;
+
+        Ok(count)
+    }
+
     async fn handle_connection(&mut self) -> Result<ConnectionResult, TransportError> {
         loop {
             match self.stream.next().await {
@@ -96,6 +112,30 @@ impl ConnectionActor {
                             self.stream
                                 .send(RedisMessage::EchoResponse(echo_string))
                                 .await?
+                        }
+                        // TODO: maybe observable?
+                        RedisMessage::Wait {
+                            replica_count: requested_replicas,
+                            timeout,
+                        } => {
+                            let mut interval =
+                                tokio::time::interval(tokio::time::Duration::from_millis(50));
+                            loop {
+                                tokio::select! {
+                                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(timeout)) => {
+                                        let replica_count =  self.get_replica_count().await?;
+                                        self.stream.send(RedisMessage::WaitReply { replica_count}).await?;
+                                        break;
+                                    }
+                                    _ = interval.tick() => {
+                                        let replica_count = self.get_replica_count().await?;
+                                        if replica_count >= requested_replicas {
+                                            self.stream.send(RedisMessage::WaitReply { replica_count }).await?;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
                         }
                         RedisMessage::Set(data) => {
                             let (reply_channel_tx, reply_channel_rx) = oneshot::channel();

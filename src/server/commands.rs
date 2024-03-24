@@ -35,6 +35,8 @@ pub enum RedisMessage {
     ReplConfGetAck,
     ReplConfAck { offset: usize },
     Info(InfoCommand),
+    Wait { replica_count: u64, timeout: u64 },
+    WaitReply { replica_count: u64 },
     CacheFound(Vec<u8>),
     CacheNotFound,
     InfoResponse(ServerMode),

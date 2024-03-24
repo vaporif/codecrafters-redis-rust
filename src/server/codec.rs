@@ -309,6 +309,18 @@ impl RedisMessage {
 
                 Ok(RedisMessage::Get(key.clone()))
             }
+            "WAIT" => {
+                let replica_count = array_command.args.first().context("wait replicacoun arg")?;
+                let replica_count = replica_count.parse().context("parse replica count")?;
+
+                let timeout = array_command.args.first().context("wait replicacoun arg")?;
+                let timeout = timeout.parse().context("parse replica count")?;
+
+                Ok(RedisMessage::Wait {
+                    replica_count,
+                    timeout,
+                })
+            }
             "REPLCONF" => {
                 let subcommand = array_command
                     .args
@@ -444,6 +456,8 @@ impl From<RedisMessage> for RESP {
                     bulk!(offset.to_string().bytes().collect_vec())
                 ]
             }
+            RedisMessage::Wait { .. } => todo!(),
+            RedisMessage::WaitReply { replica_count } => serde_resp::int!(replica_count as i64),
         }
     }
 }

@@ -5,6 +5,7 @@ use futures::SinkExt;
 use crate::prelude::*;
 
 use super::{
+    cluster,
     codec::RespTcpStream,
     commands::{RedisMessage, SetData},
 };
@@ -60,20 +61,32 @@ impl SlaveConnectionActor {
 }
 
 pub struct ActorHandle {
+    cluster_hnd: cluster::ActorHandle,
     broadcast: tokio::sync::broadcast::Sender<Message>,
 }
 
 #[allow(unused)]
 // TODO: limit replicas
 impl ActorHandle {
-    pub fn new(broadcast: tokio::sync::broadcast::Sender<Message>) -> Self {
-        Self { broadcast }
+    pub fn new(
+        cluster_hnd: cluster::ActorHandle,
+        broadcast: tokio::sync::broadcast::Sender<Message>,
+    ) -> Self {
+        Self {
+            cluster_hnd,
+            broadcast,
+        }
     }
 
     pub async fn run(&self, socket: SocketAddr, slave_stream: RespTcpStream) -> anyhow::Result<()> {
+        let cluster_hnd = self.cluster_hnd.clone();
         let mut actor =
             SlaveConnectionActor::new(socket, slave_stream, self.broadcast.subscribe()).await?;
-        tokio::spawn(async move { actor.run().await });
+        tokio::spawn(async move {
+            if let Err(err) = actor.run().await {
+                cluster_hnd.send(cluster::Message::SlaveDisconnected).await;
+            }
+        });
 
         Ok(())
     }
