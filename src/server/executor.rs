@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use crate::{prelude::*, MasterAddr};
 use rand::{distributions::Alphanumeric, Rng};
 use tokio::{net::TcpStream, task::JoinHandle};
+use tracing::{trace_span, Instrument};
 
 use super::commands::SetData;
 
@@ -52,6 +53,8 @@ pub async fn spawn_actor_executor(
 
     let resp_executor_messenger = executor_messenger.clone();
 
+    let is_slave = replication_ip.is_some();
+
     let join_handle = tokio::spawn(async move {
         let server_mode = ServerMode::new(replication_ip);
         let executor = Executor::new(
@@ -64,7 +67,14 @@ pub async fn spawn_actor_executor(
         .await;
 
         match executor {
-            Ok(executor) => executor.run().await?,
+            Ok(executor) => {
+                let span = if is_slave {
+                    trace_span!("SLAVE MODE")
+                } else {
+                    trace_span!("MASTER MODE")
+                };
+                executor.run().instrument(span).await?;
+            }
             Err(err) => Err(err)?,
         }
 
