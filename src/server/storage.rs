@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use tokio::{sync::oneshot, time::Instant};
 
-use crate::{prelude::*, ExecutorMessenger};
+use crate::prelude::*;
 
-use super::commands::*;
+use super::{cluster, commands::*};
 
 pub type GetReplyChannel = oneshot::Sender<Option<String>>;
 pub type SetReplyChannel = oneshot::Sender<Result<()>>;
@@ -26,19 +26,19 @@ pub enum Message {
 pub struct StorageActor {
     data: HashMap<String, String>,
     expire_info: HashMap<String, Instant>,
-    executor_messenger: ExecutorMessenger,
+    cluster_hnd: cluster::ActorHandle,
     receive_channel: tokio::sync::mpsc::UnboundedReceiver<Message>,
 }
 
 impl StorageActor {
     pub fn new(
-        executor_messenger: ExecutorMessenger,
+        cluster_hnd: cluster::ActorHandle,
         receive_channel: tokio::sync::mpsc::UnboundedReceiver<Message>,
     ) -> Self {
         Self {
             data: HashMap::new(),
             expire_info: HashMap::new(),
-            executor_messenger,
+            cluster_hnd,
             receive_channel,
         }
     }
@@ -106,10 +106,14 @@ impl StorageActor {
             .and_modify(|e| *e = value.clone())
             .or_insert(value);
 
-        self.executor_messenger
-            .publish_msg(super::executor::Message::ForwardSetToReplica(set_msg))
+        if self
+            .cluster_hnd
+            .send(cluster::Message::Set(set_msg))
             .await
-            .context("could not send forwarding req")?;
+            .is_err()
+        {
+            tracing::trace!("No replicas to update");
+        }
 
         if let Some(reply_channel_tx) = reply_channel_tx {
             reply_channel_tx
@@ -129,10 +133,10 @@ pub struct ActorHandle {
 }
 
 impl ActorHandle {
-    pub fn new(executor_messenger: ExecutorMessenger) -> Self {
+    pub fn new(cluster_hnd: cluster::ActorHandle) -> Self {
         let (sender, receive) = tokio::sync::mpsc::unbounded_channel();
 
-        let mut actor = StorageActor::new(executor_messenger, receive);
+        let mut actor = StorageActor::new(cluster_hnd, receive);
         tokio::spawn(async move {
             actor.run().await;
         });

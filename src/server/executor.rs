@@ -1,42 +1,8 @@
 use std::net::SocketAddr;
 
 use crate::{prelude::*, MasterAddr};
-use rand::{distributions::Alphanumeric, Rng};
 use tokio::{net::TcpStream, task::JoinHandle};
 use tracing::{trace_span, Instrument};
-
-use super::commands::SetData;
-
-#[derive(Debug, Clone)]
-pub enum ServerMode {
-    Master(MasterInfo),
-    Slave(MasterAddr),
-}
-
-#[derive(Debug, Clone)]
-pub struct MasterInfo {
-    pub master_replid: String,
-    pub master_repl_offset: i32,
-}
-
-impl ServerMode {
-    fn new(replication_ip: Option<MasterAddr>) -> Self {
-        match replication_ip {
-            Some(master_addr) => ServerMode::Slave(master_addr),
-            None => {
-                let random_string: String = rand::thread_rng()
-                    .sample_iter(&Alphanumeric)
-                    .take(40)
-                    .map(char::from)
-                    .collect();
-                ServerMode::Master(MasterInfo {
-                    master_replid: random_string,
-                    master_repl_offset: 0,
-                })
-            }
-        }
-    }
-}
 
 pub async fn spawn_actor_executor(
     replication_ip: Option<MasterAddr>,
@@ -56,9 +22,8 @@ pub async fn spawn_actor_executor(
     let is_slave = replication_ip.is_some();
 
     let join_handle = tokio::spawn(async move {
-        let server_mode = ServerMode::new(replication_ip);
         let executor = Executor::new(
-            server_mode,
+            replication_ip,
             port,
             executor_messenger,
             connection_receiver,
@@ -110,7 +75,6 @@ impl ExecutorMessenger {
 
 #[allow(unused)]
 pub struct Executor {
-    server_mode: ServerMode,
     port: u16,
     storage_hnd: super::storage::ActorHandle,
     cluster_hnd: super::cluster::ActorHandle,
@@ -121,23 +85,23 @@ pub struct Executor {
 
 impl Executor {
     async fn new(
-        server_mode: ServerMode,
+        replication_ip: Option<MasterAddr>,
         port: u16,
         executor_messenger: ExecutorMessenger,
         connection_receiver: tokio::sync::mpsc::Receiver<ConnectionMessage>,
         internal_receiver: tokio::sync::mpsc::Receiver<Message>,
     ) -> anyhow::Result<Self> {
-        let storage_hnd = super::storage::ActorHandle::new(executor_messenger.clone());
-        let cluster_hnd = super::cluster::ActorHandle::new();
+        let cluster_hnd = super::cluster::ActorHandle::new(replication_ip.clone());
+        let storage_hnd = super::storage::ActorHandle::new(cluster_hnd.clone());
 
-        if let ServerMode::Slave(ref master_addr) = server_mode {
+        if let Some(master_addr) = replication_ip {
             trace!("replicating");
             let (db_done_tx, _) = tokio::sync::oneshot::channel();
 
             executor_messenger
                 .internal_sender
                 .send(Message::ReplicateMaster {
-                    socket: master_addr.clone(),
+                    socket: master_addr,
                     channel: db_done_tx,
                 })
                 .await
@@ -150,7 +114,6 @@ impl Executor {
         }
 
         Ok(Self {
-            server_mode,
             port,
             storage_hnd,
             cluster_hnd,
@@ -169,10 +132,9 @@ impl Executor {
                         ConnectionMessage::NewConnection((stream, socket)) => {
                             let storage_hnd = self.storage_hnd.clone();
                             let executor_messenger = self.executor_messenger.clone();
-                            let server_mode = self.server_mode.clone();
                             let cluster_hnd = self.cluster_hnd.clone();
 
-                            super::connection::spawn_actor(socket, stream, executor_messenger, storage_hnd, cluster_hnd, server_mode)
+                            super::connection::spawn_actor(socket, stream, executor_messenger, storage_hnd, cluster_hnd)
 
                         }
                         ConnectionMessage::FatalError(error) => bail!(format!("fatal error {:?}", error)),
@@ -184,12 +146,6 @@ impl Executor {
                         Message::ReplicateMaster { ref socket, channel } => {
                             let master_addr = socket.clone();
                             super::replication::spawn_actor(master_addr, self.storage_hnd.clone(), self.port, channel);
-                        },
-                        // TODO: Buffer
-                        Message::ForwardSetToReplica(set_data) => {
-                            if self.cluster_hnd.send(super::cluster::Message::Set(set_data)).await.is_err() {
-                                tracing::trace!("No replicas to update");
-                            };
                         },
                         Message::FatalError(error) => Err(error)?
                     }
@@ -212,6 +168,5 @@ pub enum Message {
         #[debug_ignore]
         channel: tokio::sync::oneshot::Sender<TcpStream>,
     },
-    ForwardSetToReplica(SetData),
     FatalError(anyhow::Error),
 }

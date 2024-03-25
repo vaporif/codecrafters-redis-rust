@@ -1,8 +1,9 @@
 use std::{time::Duration, usize};
 
 use derive_debug_extras::DebugExtras;
+use serde_resp::RESP;
 
-use super::executor::ServerMode;
+use super::cluster::ServerMode;
 
 #[derive(Debug, Clone)]
 pub struct SetData {
@@ -40,6 +41,15 @@ pub enum RedisMessage {
     CacheFound(Vec<u8>),
     CacheNotFound,
     InfoResponse(ServerMode),
+}
+
+impl RedisMessage {
+    pub fn bytes_len(&self) -> usize {
+        serde_resp::ser::to_string(&RESP::from(self.clone()))
+            .expect("serialize")
+            .bytes()
+            .len()
+    }
 }
 
 #[derive(Debug, Clone)]

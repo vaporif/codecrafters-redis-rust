@@ -7,14 +7,17 @@ use tokio_util::codec::Framed;
 use tokio::sync::oneshot;
 
 use super::{
-    cluster,
+    cluster::{self, ServerMode},
     codec::{RespCodec, RespTcpStream},
     commands::*,
     error::TransportError,
-    executor::{MasterInfo, ServerMode},
     storage,
 };
-use crate::{prelude::*, server::rdb::Rdb, ExecutorMessenger};
+use crate::{
+    prelude::*,
+    server::{cluster::MasterInfo, rdb::Rdb},
+    ExecutorMessenger,
+};
 
 #[allow(unused)]
 #[derive(DebugExtras)]
@@ -25,8 +28,6 @@ pub struct ConnectionActor {
     storage_hnd: storage::ActorHandle,
     #[debug_ignore]
     cluster_hnd: cluster::ActorHandle,
-    #[debug_ignore]
-    server_mode: ServerMode,
     socket: SocketAddr,
     #[debug_ignore]
     stream: RespTcpStream,
@@ -43,7 +44,6 @@ impl ConnectionActor {
         executor_messenger: ExecutorMessenger,
         storage_hnd: storage::ActorHandle,
         cluster_hnd: cluster::ActorHandle,
-        server_mode: ServerMode,
         stream_socket: SocketAddr,
         stream: TcpStream,
     ) -> Self {
@@ -51,7 +51,6 @@ impl ConnectionActor {
         Self {
             storage_hnd,
             cluster_hnd,
-            server_mode,
             executor_messenger,
             socket: stream_socket,
             stream,
@@ -87,6 +86,19 @@ impl ConnectionActor {
             .context("waiting for reply for wait")?;
 
         Ok(count)
+    }
+
+    async fn get_server_mode(&mut self) -> anyhow::Result<ServerMode> {
+        let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
+        self.cluster_hnd
+            .send(cluster::Message::GetServerMode {
+                channel: reply_channel_tx,
+            })
+            .await?;
+
+        reply_channel_rx
+            .await
+            .context("waiting for get server mode")
     }
 
     async fn handle_connection(&mut self) -> Result<ConnectionResult, TransportError> {
@@ -171,9 +183,10 @@ impl ConnectionActor {
                             offset,
                         } => match (replication_id.as_str(), offset) {
                             ("?", -1) => {
+                                let server_mode = self.get_server_mode().await?;
                                 let ServerMode::Master(MasterInfo {
                                     ref master_replid, ..
-                                }) = self.server_mode
+                                }) = server_mode
                                 else {
                                     return Err(TransportError::Other(anyhow!(
                                         "server in slave mode".to_string()
@@ -219,8 +232,9 @@ impl ConnectionActor {
                         }
                         RedisMessage::Info(info_data) => match info_data {
                             InfoCommand::Replication => {
+                                let server_mode = self.get_server_mode().await?;
                                 self.stream
-                                    .send(RedisMessage::InfoResponse(self.server_mode.clone()))
+                                    .send(RedisMessage::InfoResponse(server_mode.clone()))
                                     .await?
                             }
                         },
@@ -245,14 +259,12 @@ pub fn spawn_actor(
     executor_messenger: ExecutorMessenger,
     storage_hnd: storage::ActorHandle,
     cluster_hnd: cluster::ActorHandle,
-    server_mode: ServerMode,
 ) {
     tokio::spawn(async move {
         let actor = super::connection::ConnectionActor::new(
             executor_messenger,
             storage_hnd,
             cluster_hnd,
-            server_mode,
             socket,
             stream,
         );

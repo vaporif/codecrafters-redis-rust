@@ -1,7 +1,6 @@
 use crate::{prelude::*, MasterAddr};
 use anyhow::Context;
 use futures::{SinkExt, StreamExt};
-use serde_resp::RESP;
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
@@ -123,10 +122,8 @@ impl ReplicationActor {
         while let Some(command) = self.stream.next().await {
             let command = command.context("reading master connection")?;
 
-            let offset = serde_resp::ser::to_string(&RESP::from(command.clone()))
-                .context("serialize")?
-                .bytes()
-                .len();
+            let offset = command.bytes_len();
+
             trace!("received command from master {:?}", &command);
             match command {
                 RedisMessage::Set(data) => {

@@ -1,6 +1,6 @@
 use super::{
+    cluster::{MasterInfo, ServerMode},
     error::TransportError,
-    executor::{MasterInfo, ServerMode},
 };
 use bytes::Buf;
 use itertools::{Either, Itertools};
