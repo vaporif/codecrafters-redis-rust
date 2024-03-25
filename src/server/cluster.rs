@@ -118,17 +118,21 @@ impl Actor {
                         let count_up_to_date: usize = self
                             .replicas_offsets
                             .iter()
-                            .filter(|f| f.1 == &master_info.master_repl_offset)
+                            .filter(|f| f.1 >= &master_info.master_repl_offset)
                             .map(|f| *f.1)
                             .sum();
+
+                        trace!(
+                            "request to calculate synced replicas, current value: {}, master offset: {}",
+                            count_up_to_date,
+                            &master_info.master_repl_offset
+                        );
 
                         if count_up_to_date < expected_replicas as usize {
                             self.slave_handler.send(slave::Message::RefreshOffset).await;
                         }
 
-                        channel
-                            .send(self.replicas_offsets.len() as u64)
-                            .expect("sent");
+                        channel.send(count_up_to_date as u64).expect("sent");
                     } else {
                         panic!("this is for master only");
                     }

@@ -72,6 +72,7 @@ impl ConnectionActor {
         }
     }
 
+    #[instrument(skip(self))]
     async fn get_up_to_date_replica_count(
         &mut self,
         expected_replicas: u64,
@@ -88,6 +89,8 @@ impl ConnectionActor {
         let count = reply_channel_rx
             .await
             .context("waiting for reply for wait")?;
+
+        trace!("got {count} synced replicas");
 
         Ok(count)
     }
