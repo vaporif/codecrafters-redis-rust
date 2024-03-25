@@ -1,3 +1,4 @@
+use core::panic;
 use std::{collections::HashMap, default, net::SocketAddr, usize};
 
 use rand::{distributions::Alphanumeric, Rng};
@@ -124,11 +125,13 @@ impl Actor {
                         if count_up_to_date < expected_replicas as usize {
                             self.slave_handler.send(slave::Message::RefreshOffset).await;
                         }
-                    }
 
-                    channel
-                        .send(self.replicas_offsets.len() as u64)
-                        .expect("sent");
+                        channel
+                            .send(self.replicas_offsets.len() as u64)
+                            .expect("sent");
+                    } else {
+                        panic!("this is for master only");
+                    }
                 }
                 Message::Set(set_data) => {
                     trace!("sending to slaves");
@@ -171,6 +174,11 @@ impl ActorHandle {
         let handle = hnd.clone();
 
         tokio::spawn(async move {
+            let default_panic = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                error!("cluster crashed {info:?}");
+                std::process::exit(1);
+            }));
             let mut actor = Actor::new(
                 replication_ip,
                 super::slave::ActorHandle::new(handle, broadcast),
