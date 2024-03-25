@@ -116,6 +116,8 @@ impl ConnectionActor {
                         Err(e) => Err(e)?,
                     };
 
+                    let command_bytes_len = command.bytes_len();
+
                     trace!("command received {:?}", command);
 
                     match command {
@@ -163,6 +165,12 @@ impl ConnectionActor {
                                 })
                                 .await
                                 .context("sending set store command")?;
+
+                            self.cluster_hnd
+                                .send(cluster::Message::AddMasterOffset {
+                                    offset: command_bytes_len,
+                                })
+                                .await?;
 
                             let message =
                                 match reply_channel_rx.await.context("waiting for reply for set") {

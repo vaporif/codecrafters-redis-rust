@@ -1,4 +1,3 @@
-use core::panic;
 use std::{net::SocketAddr, usize};
 
 use rand::{distributions::Alphanumeric, Rng};
@@ -54,7 +53,7 @@ pub enum Message {
         #[debug_ignore]
         channel: tokio::sync::oneshot::Sender<ServerMode>,
     },
-    SetMasterOffset {
+    AddMasterOffset {
         offset: usize,
     },
 }
@@ -91,6 +90,8 @@ impl Actor {
 
     #[instrument(skip(self))]
     async fn run(&mut self) {
+        _ = self.replica_count_up_to_date;
+
         while let Some(message) = self.receiver.recv().await {
             trace!("new message {:?}", &message);
             match message {
@@ -115,12 +116,11 @@ impl Actor {
                 Message::GetServerMode { channel } => {
                     channel.send(self.server_mode.clone());
                 }
-                Message::SetMasterOffset { offset } => match self.server_mode {
-                    ServerMode::Master(ref mut master_info) => {
-                        master_info.master_repl_offset = offset;
+                Message::AddMasterOffset { offset } => {
+                    if let ServerMode::Master(ref mut master_info) = self.server_mode {
+                        master_info.master_repl_offset += offset;
                     }
-                    ServerMode::Slave(_) => panic!("incorrect"),
-                },
+                }
             }
 
             trace!("message processed");

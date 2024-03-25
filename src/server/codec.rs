@@ -401,7 +401,9 @@ impl From<RedisMessage> for RESP {
         match val {
             RedisMessage::Ping(_) => array![bulk!(b"PING".to_vec())],
             RedisMessage::Pong => simple!("PONG".to_string()),
-            RedisMessage::Echo(_) => todo!(),
+            RedisMessage::Echo(echo_string) => {
+                array![bulk!(echo_string.bytes().collect_vec())]
+            }
             RedisMessage::Set(set_data) => {
                 array![
                     bulk!(b"SET".to_vec()),
@@ -409,7 +411,9 @@ impl From<RedisMessage> for RESP {
                     bulk!(set_data.value.into_bytes())
                 ]
             }
-            RedisMessage::Get(_) => todo!(),
+            RedisMessage::Get(key) => {
+                array![bulk!(b"GET".to_vec()), bulk!(key.bytes().collect_vec()),]
+            }
             RedisMessage::ReplConfPort { port } => array![
                 bulk!(b"REPLCONF".to_vec()),
                 bulk!(b"LISTENING-PORT".to_vec()),
@@ -420,7 +424,9 @@ impl From<RedisMessage> for RESP {
                 bulk!(b"CAPA".to_vec()),
                 bulk!(capa.to_string().into_bytes()),
             ],
-            RedisMessage::Info(_) => todo!(),
+            RedisMessage::Info(_) => {
+                array![bulk!(b"INFO".to_vec()), bulk!(b"REPLICATION".to_vec()),]
+            }
             RedisMessage::Ok => bulk!(b"OK".to_vec()),
             RedisMessage::Psync {
                 replication_id,
@@ -456,7 +462,16 @@ impl From<RedisMessage> for RESP {
                     bulk!(offset.to_string().bytes().collect_vec())
                 ]
             }
-            RedisMessage::Wait { .. } => todo!(),
+            RedisMessage::Wait {
+                replica_count,
+                timeout,
+            } => {
+                array![
+                    bulk!(b"WAIT".to_vec()),
+                    bulk!(replica_count.to_string().bytes().collect_vec()),
+                    bulk!(timeout.to_string().bytes().collect_vec())
+                ]
+            }
             RedisMessage::WaitReply { replica_count } => serde_resp::int!(replica_count as i64),
         }
     }
