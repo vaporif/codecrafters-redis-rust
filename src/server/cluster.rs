@@ -69,7 +69,6 @@ pub enum Message {
 pub struct Actor {
     server_mode: ServerMode,
     replicas_offsets: HashMap<SocketAddr, usize>,
-    replica_count_up_to_date: u64,
     slave_handler: super::slave::ActorHandle,
     receiver: tokio::sync::mpsc::UnboundedReceiver<Message>,
 }
@@ -90,7 +89,6 @@ impl Actor {
         Actor {
             server_mode: ServerMode::new(master_addr),
             replicas_offsets: default::Default::default(),
-            replica_count_up_to_date: 0,
             slave_handler,
             receiver,
         }
@@ -98,8 +96,7 @@ impl Actor {
 
     #[instrument(skip(self))]
     async fn run(&mut self) {
-        _ = self.replica_count_up_to_date;
-
+        trace!("cluster started {:?}", self.server_mode);
         while let Some(message) = self.receiver.recv().await {
             trace!("new message {:?}", &message);
             match message {

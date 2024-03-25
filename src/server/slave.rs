@@ -116,6 +116,7 @@ impl ActorHandle {
         .await?;
         tokio::spawn(async move {
             if let Err(err) = actor.run().await {
+                error!("slave error {err:?}");
                 cluster_hnd
                     .send(cluster::Message::SlaveDisconnected { socket })
                     .await;
