@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, usize};
+use std::{collections::HashMap, default, net::SocketAddr, usize};
 
 use rand::{distributions::Alphanumeric, Rng};
 
@@ -43,7 +43,9 @@ pub type MasterAddr = (String, u16);
 #[allow(unused)]
 pub enum Message {
     AddNewSlave((SocketAddr, RespTcpStream)),
-    SlaveDisconnected,
+    SlaveDisconnected {
+        socket: SocketAddr,
+    },
     Set(SetData),
     GetSlaveCount {
         #[debug_ignore]
@@ -56,11 +58,15 @@ pub enum Message {
     AddMasterOffset {
         offset: usize,
     },
+    NotifyReplicaOffset {
+        socket: SocketAddr,
+        offset: usize,
+    },
 }
 
 pub struct Actor {
     server_mode: ServerMode,
-    replica_count: u64,
+    replicas_offsets: HashMap<SocketAddr, usize>,
     replica_count_up_to_date: u64,
     slave_handler: super::slave::ActorHandle,
     receiver: tokio::sync::mpsc::UnboundedReceiver<Message>,
@@ -81,7 +87,7 @@ impl Actor {
 
         Actor {
             server_mode: ServerMode::new(master_addr),
-            replica_count: 0,
+            replicas_offsets: default::Default::default(),
             replica_count_up_to_date: 0,
             slave_handler,
             receiver,
@@ -99,12 +105,13 @@ impl Actor {
                     if let Err(error) = self.slave_handler.run(socket, stream).await {
                         error!("failed to connect {:?}", error);
                     }
-
-                    self.replica_count += 1;
+                    self.replicas_offsets.entry(socket).or_insert(0);
                 }
-                Message::SlaveDisconnected => self.replica_count -= 1,
+                Message::SlaveDisconnected { socket } => {
+                    self.replicas_offsets.remove(&socket);
+                }
                 Message::GetSlaveCount { channel } => {
-                    channel.send(self.replica_count);
+                    channel.send(self.replicas_offsets.len() as u64);
                 }
                 Message::Set(set_data) => {
                     trace!("sending to slaves");
@@ -120,6 +127,12 @@ impl Actor {
                     if let ServerMode::Master(ref mut master_info) = self.server_mode {
                         master_info.master_repl_offset += offset;
                     }
+                }
+                Message::NotifyReplicaOffset { socket, offset } => {
+                    self.replicas_offsets
+                        .entry(socket)
+                        .and_modify(|f| *f = offset)
+                        .or_insert(offset);
                 }
             }
 

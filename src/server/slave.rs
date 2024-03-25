@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use futures::SinkExt;
+use futures::{SinkExt, StreamExt};
 
 use crate::prelude::*;
 
@@ -19,6 +19,9 @@ pub enum Message {
 #[allow(unused)]
 #[derive(DebugExtras)]
 struct SlaveConnectionActor {
+    offset: usize,
+    #[debug_ignore]
+    cluster_hnd: cluster::ActorHandle,
     socket: SocketAddr,
     #[debug_ignore]
     stream: RespTcpStream,
@@ -30,9 +33,12 @@ impl SlaveConnectionActor {
     async fn new(
         socket: SocketAddr,
         stream: RespTcpStream,
+        cluster_hnd: cluster::ActorHandle,
         receive: tokio::sync::broadcast::Receiver<Message>,
     ) -> anyhow::Result<Self> {
         Ok(Self {
+            offset: 0,
+            cluster_hnd,
             socket,
             stream,
             receive,
@@ -50,6 +56,21 @@ impl SlaveConnectionActor {
                         .send(RedisMessage::Set(set_data))
                         .await
                         .context("sent set to slave")?;
+
+                    // self.stream.send(RedisMessage::ReplConfGetAck).await?;
+
+                    // let RedisMessage::ReplConfAck { offset } =
+                    //     self.stream.next().await.unwrap().unwrap()
+                    // else {
+                    //     bail!("not offset");
+                    // };
+
+                    // self.cluster_hnd
+                    //     .send(cluster::Message::NotifyReplicaOffset {
+                    //         socket: self.socket,
+                    //         offset,
+                    //     })
+                    //     .await?;
                 }
             }
 
@@ -80,11 +101,18 @@ impl ActorHandle {
 
     pub async fn run(&self, socket: SocketAddr, slave_stream: RespTcpStream) -> anyhow::Result<()> {
         let cluster_hnd = self.cluster_hnd.clone();
-        let mut actor =
-            SlaveConnectionActor::new(socket, slave_stream, self.broadcast.subscribe()).await?;
+        let mut actor = SlaveConnectionActor::new(
+            socket,
+            slave_stream,
+            cluster_hnd.clone(),
+            self.broadcast.subscribe(),
+        )
+        .await?;
         tokio::spawn(async move {
             if let Err(err) = actor.run().await {
-                cluster_hnd.send(cluster::Message::SlaveDisconnected).await;
+                cluster_hnd
+                    .send(cluster::Message::SlaveDisconnected { socket })
+                    .await;
             }
         });
 
