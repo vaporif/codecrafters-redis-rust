@@ -3,6 +3,7 @@ use std::{collections::HashMap, default, net::SocketAddr, usize};
 use rand::{distributions::Alphanumeric, Rng};
 
 pub use crate::prelude::*;
+use crate::server::slave;
 
 use super::{codec::RespTcpStream, commands::SetData};
 
@@ -47,7 +48,8 @@ pub enum Message {
         socket: SocketAddr,
     },
     Set(SetData),
-    GetSlaveCount {
+    GetUpToDateSlaveCount {
+        expected_replicas: u64,
         #[debug_ignore]
         channel: tokio::sync::oneshot::Sender<u64>,
     },
@@ -110,15 +112,30 @@ impl Actor {
                 Message::SlaveDisconnected { socket } => {
                     self.replicas_offsets.remove(&socket);
                 }
-                Message::GetSlaveCount { channel } => {
-                    channel.send(self.replicas_offsets.len() as u64);
+                Message::GetUpToDateSlaveCount {
+                    expected_replicas,
+                    channel,
+                } => {
+                    if let ServerMode::Master(ref master_info) = self.server_mode {
+                        let count_up_to_date: usize = self
+                            .replicas_offsets
+                            .iter()
+                            .filter(|f| f.1 == &master_info.master_repl_offset)
+                            .map(|f| *f.1)
+                            .sum();
+
+                        if count_up_to_date < expected_replicas as usize {
+                            self.slave_handler.send(slave::Message::RefreshOffset).await;
+                        }
+                    }
+
+                    channel
+                        .send(self.replicas_offsets.len() as u64)
+                        .expect("sent");
                 }
                 Message::Set(set_data) => {
                     trace!("sending to slaves");
-                    _ = self
-                        .slave_handler
-                        .send(super::slave::Message::Set(set_data))
-                        .await;
+                    _ = self.slave_handler.send(slave::Message::Set(set_data)).await;
                 }
                 Message::GetServerMode { channel } => {
                     channel.send(self.server_mode.clone());
@@ -173,6 +190,8 @@ impl ActorHandle {
 
     #[instrument(skip(self))]
     pub async fn send(&self, message: Message) -> Result<()> {
-        self.sender.send(message).context("sending message")
+        self.sender
+            .send(message)
+            .context("[cluster] sending message")
     }
 }

@@ -310,14 +310,15 @@ impl RedisMessage {
                 Ok(RedisMessage::Get(key.clone()))
             }
             "WAIT" => {
-                let replica_count = array_command.args.first().context("wait replicacoun arg")?;
-                let replica_count = replica_count.parse().context("parse replica count")?;
+                let req_replica_count =
+                    array_command.args.first().context("wait replicacoun arg")?;
+                let req_replica_count = req_replica_count.parse().context("parse replica count")?;
 
                 let timeout = array_command.args.first().context("wait replicacoun arg")?;
                 let timeout = timeout.parse().context("parse replica count")?;
 
                 Ok(RedisMessage::Wait {
-                    replica_count,
+                    req_replica_count,
                     timeout,
                 })
             }
@@ -463,7 +464,7 @@ impl From<RedisMessage> for RESP {
                 ]
             }
             RedisMessage::Wait {
-                replica_count,
+                req_replica_count: replica_count,
                 timeout,
             } => {
                 array![

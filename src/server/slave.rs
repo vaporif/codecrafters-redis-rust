@@ -14,6 +14,7 @@ use super::{
 #[derive(Clone, Debug)]
 pub enum Message {
     Set(SetData),
+    RefreshOffset,
 }
 
 #[allow(unused)]
@@ -56,21 +57,26 @@ impl SlaveConnectionActor {
                         .send(RedisMessage::Set(set_data))
                         .await
                         .context("sent set to slave")?;
+                }
+                Message::RefreshOffset => {
+                    self.stream.send(RedisMessage::ReplConfGetAck).await?;
 
-                    // self.stream.send(RedisMessage::ReplConfGetAck).await?;
+                    let RedisMessage::ReplConfAck { offset } = self
+                        .stream
+                        .next()
+                        .await
+                        .context("ack any response")?
+                        .context("ack response")?
+                    else {
+                        bail!("not offset");
+                    };
 
-                    // let RedisMessage::ReplConfAck { offset } =
-                    //     self.stream.next().await.unwrap().unwrap()
-                    // else {
-                    //     bail!("not offset");
-                    // };
-
-                    // self.cluster_hnd
-                    //     .send(cluster::Message::NotifyReplicaOffset {
-                    //         socket: self.socket,
-                    //         offset,
-                    //     })
-                    //     .await?;
+                    self.cluster_hnd
+                        .send(cluster::Message::NotifyReplicaOffset {
+                            socket: self.socket,
+                            offset,
+                        })
+                        .await?;
                 }
             }
 

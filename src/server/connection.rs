@@ -72,10 +72,14 @@ impl ConnectionActor {
         }
     }
 
-    async fn get_replica_count(&mut self) -> anyhow::Result<u64> {
+    async fn get_up_to_date_replica_count(
+        &mut self,
+        expected_replicas: u64,
+    ) -> anyhow::Result<u64> {
         let (reply_channel_tx, reply_channel_rx) = oneshot::channel();
         self.cluster_hnd
-            .send(cluster::Message::GetSlaveCount {
+            .send(cluster::Message::GetUpToDateSlaveCount {
+                expected_replicas,
                 channel: reply_channel_tx,
             })
             .await
@@ -129,7 +133,7 @@ impl ConnectionActor {
                         }
                         // TODO: maybe observable?
                         RedisMessage::Wait {
-                            replica_count: requested_replicas,
+                            req_replica_count,
                             timeout,
                         } => {
                             let start_instant = tokio::time::Instant::now();
@@ -141,14 +145,15 @@ impl ConnectionActor {
                                     tokio::time::sleep(tokio::time::Duration::from_millis(timeout));
                             }
                             loop {
-                                let replica_count = self.get_replica_count().await?;
+                                let replica_count =
+                                    self.get_up_to_date_replica_count(req_replica_count).await?;
                                 tokio::select! {
                                     _ = &mut timeout => {
                                         self.stream.send(RedisMessage::WaitReply { replica_count}).await?;
                                         break;
                                     }
                                     _ = interval.tick() => {
-                                        if replica_count >= requested_replicas {
+                                        if replica_count >= req_replica_count {
                                             self.stream.send(RedisMessage::WaitReply { replica_count }).await?;
                                             break;
                                         }

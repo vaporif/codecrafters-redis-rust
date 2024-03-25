@@ -28,16 +28,33 @@ pub enum RedisMessage {
     Err(String),
     Set(SetData),
     Get(String),
-    Psync { replication_id: String, offset: i32 },
-    FullResync { replication_id: String, offset: i32 },
+    Psync {
+        replication_id: String,
+        offset: i32,
+    },
+    FullResync {
+        replication_id: String,
+        offset: i32,
+    },
     DbTransfer(#[debug_ignore] Vec<u8>),
-    ReplConfPort { port: u16 },
-    ReplConfCapa { capa: String },
+    ReplConfPort {
+        port: u16,
+    },
+    ReplConfCapa {
+        capa: String,
+    },
     ReplConfGetAck,
-    ReplConfAck { offset: usize },
+    ReplConfAck {
+        offset: usize,
+    },
     Info(InfoCommand),
-    Wait { replica_count: u64, timeout: u64 },
-    WaitReply { replica_count: u64 },
+    Wait {
+        req_replica_count: u64,
+        timeout: u64,
+    },
+    WaitReply {
+        replica_count: u64,
+    },
     CacheFound(Vec<u8>),
     CacheNotFound,
     InfoResponse(ServerMode),
